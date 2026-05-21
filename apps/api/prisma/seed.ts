@@ -21,6 +21,7 @@ async function main() {
     data: {
       name: mathGrade1Curriculum.name,
       code: mathGrade1Curriculum.code,
+      grade: 1,
       isEnabled: true,
     },
   });
@@ -28,10 +29,10 @@ async function main() {
   // Create other subject placeholders
   await prisma.subject.createMany({
     data: [
-      { name: '国語', code: 'japanese', isEnabled: false },
-      { name: '英語', code: 'english', isEnabled: false },
-      { name: '理科', code: 'science', isEnabled: false },
-      { name: '社会', code: 'social', isEnabled: false },
+      { name: '国語', code: 'japanese', grade: 1, isEnabled: false },
+      { name: '英語', code: 'english', grade: 1, isEnabled: false },
+      { name: '理科', code: 'science', grade: 1, isEnabled: false },
+      { name: '社会', code: 'social', grade: 1, isEnabled: false },
     ],
   });
 
@@ -62,6 +63,16 @@ async function main() {
           qType = QuestionType.MULTIPLE_CHOICE;
         } else if (q.type === 'NUMBER_INPUT') {
           qType = QuestionType.NUMBER_INPUT;
+        } else if (q.type === 'FILL_IN_BLANK') {
+          qType = QuestionType.FILL_IN_BLANK;
+        } else if ((q.type as string) === 'SINGLE_CHOICE') {
+          qType = QuestionType.SINGLE_CHOICE;
+        } else if ((q.type as string) === 'NUMERIC') {
+          qType = QuestionType.NUMERIC;
+        } else if ((q.type as string) === 'TEXT_SHORT') {
+          qType = QuestionType.TEXT_SHORT;
+        } else if ((q.type as string) === 'FILL_BLANK') {
+          qType = QuestionType.FILL_BLANK;
         } else {
           qType = QuestionType.FILL_IN_BLANK;
         }

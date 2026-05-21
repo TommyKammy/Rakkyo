@@ -19,6 +19,7 @@ export interface AttemptMock {
   isCorrect: boolean;
   hintsUsed: number;
   answerSubmitted: string;
+  durationSeconds?: number | null;
   createdAt: string;
 }
 
@@ -62,6 +63,7 @@ class MockDatabase {
         isCorrect: true,
         hintsUsed: 0,
         answerSubmitted: '-2',
+        durationSeconds: 15,
         createdAt: getPastDate(4, 16)
       },
       {
@@ -71,6 +73,7 @@ class MockDatabase {
         isCorrect: true,
         hintsUsed: 1,
         answerSubmitted: '-11',
+        durationSeconds: 28,
         createdAt: getPastDate(4, 16 + 5)
       },
       // 3 days ago - Unit 1
@@ -81,6 +84,7 @@ class MockDatabase {
         isCorrect: true,
         hintsUsed: 2,
         answerSubmitted: '18',
+        durationSeconds: 45,
         createdAt: getPastDate(3, 17)
       },
       {
@@ -90,6 +94,7 @@ class MockDatabase {
         isCorrect: false,
         hintsUsed: 3,
         answerSubmitted: '3', // Wrong answer
+        durationSeconds: 52,
         createdAt: getPastDate(3, 17 + 10)
       },
       // 2 days ago - Unit 1
@@ -100,6 +105,7 @@ class MockDatabase {
         isCorrect: true,
         hintsUsed: 1,
         answerSubmitted: '-3', // Retry and correct
+        durationSeconds: 18,
         createdAt: getPastDate(2, 16)
       },
       {
@@ -109,6 +115,7 @@ class MockDatabase {
         isCorrect: true,
         hintsUsed: 2,
         answerSubmitted: '2 と -8',
+        durationSeconds: 64,
         createdAt: getPastDate(2, 16 + 8)
       },
       // Yesterday - Unit 1 and Unit 2: Characters and Expressions
@@ -119,6 +126,7 @@ class MockDatabase {
         isCorrect: true,
         hintsUsed: 3,
         answerSubmitted: '-6',
+        durationSeconds: 88,
         createdAt: getPastDate(1, 18)
       },
       {
@@ -128,6 +136,7 @@ class MockDatabase {
         isCorrect: false,
         hintsUsed: 1,
         answerSubmitted: '11', // Wrong answer
+        durationSeconds: 37,
         createdAt: getPastDate(1, 18 + 12)
       },
       // Today - Unit 2
@@ -138,6 +147,7 @@ class MockDatabase {
         isCorrect: true,
         hintsUsed: 0,
         answerSubmitted: '-11', // Retry and correct
+        durationSeconds: 12,
         createdAt: getPastDate(0, 15)
       },
       {
@@ -147,6 +157,7 @@ class MockDatabase {
         isCorrect: true,
         hintsUsed: 1,
         answerSubmitted: '-4x-3',
+        durationSeconds: 42,
         createdAt: getPastDate(0, 15 + 10)
       }
     );

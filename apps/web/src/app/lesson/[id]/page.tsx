@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useEffect, useState, Suspense } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { mathGrade1Curriculum } from "@rakkyo/curriculum";
 
 // Styled Math Text Renderer to parse LaTeX variables dynamically and cleanly
@@ -49,9 +49,11 @@ interface UserProfile {
   isMock?: boolean;
 }
 
-export default function ExerciseScreen() {
+function ExerciseScreenContent() {
   const router = useRouter();
   const { id } = useParams();
+  const searchParams = useSearchParams();
+  const isReview = searchParams?.get("review") === "true";
   const lessonIdStr = Array.isArray(id) ? id[0] : id;
   const lessonIndex = parseInt(lessonIdStr || "1") - 1;
 
@@ -73,6 +75,9 @@ export default function ExerciseScreen() {
   const [showClearModal, setShowClearModal] = useState(false);
   const [showLevelUpModal, setShowLevelUpModal] = useState(false);
   const [levelUpTo, setLevelUpTo] = useState(0);
+
+  // Timer state
+  const [startTime, setStartTime] = useState<number>(Date.now());
 
   // Progressive Hint states (S-007)
   const [showHintPanel, setShowHintPanel] = useState(false);
@@ -120,6 +125,11 @@ export default function ExerciseScreen() {
   }, [showHintPanel, hintStage, currentQIdx]);
 
   useEffect(() => {
+    // Reset timer when question index changes
+    setStartTime(Date.now());
+  }, [currentQIdx]);
+
+  useEffect(() => {
     const token = localStorage.getItem("rakkyo_token");
     const userStr = localStorage.getItem("rakkyo_user");
 
@@ -149,7 +159,7 @@ export default function ExerciseScreen() {
     if (isChecked) return;
 
     let submitted = "";
-    if (currentQuestion.type === "MULTIPLE_CHOICE") {
+    if (currentQuestion.type === "MULTIPLE_CHOICE" || currentQuestion.type === "SINGLE_CHOICE") {
       if (!selectedOption) return;
       submitted = selectedOption.trim();
     } else {
@@ -159,6 +169,7 @@ export default function ExerciseScreen() {
 
     const token = localStorage.getItem("rakkyo_token");
     const hintsUsed = showHintPanel ? hintStage : 0;
+    const durationSeconds = Math.max(1, Math.round((Date.now() - startTime) / 1000));
 
     // Check locally first for instant evaluation/fallback
     const isAnsCorrect = currentQuestion.answers.some(
@@ -179,7 +190,9 @@ export default function ExerciseScreen() {
           body: JSON.stringify({
             questionId: currentQuestion.id || currentQuestion.prompt,
             answerSubmitted: submitted,
-            hintsUsed
+            hintsUsed,
+            durationSeconds,
+            isReview
           })
         });
 
@@ -203,17 +216,19 @@ export default function ExerciseScreen() {
 
     // Local fallback evaluation (offline mode)
     if (isAnsCorrect) {
-      // Award +10 XP
+      // Award XP (+25 XP for review, +10 XP normally)
+      const xpAwarded = isReview ? 25 : 10;
       const updatedUser = { ...user };
-      updatedUser.currentXp += 10;
+      updatedUser.currentXp += xpAwarded;
 
       // Check level up: Level * 100 XP threshold
-      const xpNeeded = updatedUser.level * 100;
-      if (updatedUser.currentXp >= xpNeeded) {
+      let xpNeeded = updatedUser.level * 100;
+      while (updatedUser.currentXp >= xpNeeded) {
         updatedUser.currentXp -= xpNeeded;
         updatedUser.level += 1;
         setLevelUpTo(updatedUser.level);
         setShowLevelUpModal(true);
+        xpNeeded = updatedUser.level * 100;
       }
 
       setUser(updatedUser);
@@ -301,7 +316,7 @@ export default function ExerciseScreen() {
             <div className="border-t border-slate-100 pt-6 space-y-4">
               
               {/* MULTIPLE CHOICE GRID */}
-              {currentQuestion.type === "MULTIPLE_CHOICE" && (
+              {(currentQuestion.type === "MULTIPLE_CHOICE" || currentQuestion.type === "SINGLE_CHOICE") && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {currentQuestion.options.map((opt, idx) => (
                     <button
@@ -324,7 +339,7 @@ export default function ExerciseScreen() {
               )}
 
               {/* NUMBER INPUT / FILL IN BLANK */}
-              {currentQuestion.type !== "MULTIPLE_CHOICE" && (
+              {currentQuestion.type !== "MULTIPLE_CHOICE" && currentQuestion.type !== "SINGLE_CHOICE" && (
                 <div>
                   <label className="block text-2xs font-extrabold text-slate-400 mb-2 ml-1">
                     こたえをここに入力してね
@@ -333,7 +348,7 @@ export default function ExerciseScreen() {
                     type="text"
                     disabled={isChecked}
                     placeholder={
-                      currentQuestion.type === "NUMBER_INPUT"
+                      currentQuestion.type === "NUMBER_INPUT" || currentQuestion.type === "NUMERIC"
                         ? "例: -2 (半角で入力してね)"
                         : "例: -4x-3 (文字と式のルールを守って入力してね)"
                     }
@@ -390,7 +405,7 @@ export default function ExerciseScreen() {
                   <button
                     onClick={handleCheckAnswer}
                     disabled={
-                      currentQuestion.type === "MULTIPLE_CHOICE"
+                      currentQuestion.type === "MULTIPLE_CHOICE" || currentQuestion.type === "SINGLE_CHOICE"
                         ? !selectedOption
                         : !textAnswer.trim()
                     }
@@ -633,14 +648,16 @@ export default function ExerciseScreen() {
           <div className="bg-white border-4 border-pastel-green-border rounded-3xl p-8 max-w-sm w-full text-center bubbly-shadow-lg relative overflow-hidden animate-bounce-gentle">
             <div className="absolute top-0 inset-x-0 h-2 bg-gradient-to-r from-pastel-green-dark via-pastel-yellow-dark to-pastel-blue-dark" />
             
-            <span className="text-6xl inline-block mb-4">🏆</span>
+            <span className="text-6xl inline-block mb-4">{isReview ? "🔥" : "🏆"}</span>
             
             <h3 className="text-2xl font-extrabold text-slate-800 tracking-tight">
-              レッスンクリア！
+              {isReview ? "復習ミッションクリア！" : "レッスンクリア！"}
             </h3>
             
             <p className="text-xs font-bold text-slate-500 leading-relaxed my-4">
-              おめでとう！単元すべての問題（{questions.length}問）をみごとにクリアしたよ！
+              {isReview
+                ? "すごい！苦手な問題をみごとにやっつけたよ！ラッキョくんも大いばり！"
+                : `おめでとう！単元すべての問題（${questions.length}問）をみごとにクリアしたよ！`}
             </p>
 
             <div className="bg-pastel-green border-2 border-pastel-green-border rounded-2xl p-4 flex flex-col items-center justify-center mb-6 bubbly-shadow-md">
@@ -648,7 +665,7 @@ export default function ExerciseScreen() {
                 クリア報酬
               </span>
               <span className="text-xl font-extrabold text-slate-700 mt-1">
-                +100 XP 獲得！
+                {isReview ? "+15 XP ボーナス獲得！" : "+100 XP 獲得！"}
               </span>
             </div>
 
@@ -656,12 +673,26 @@ export default function ExerciseScreen() {
               onClick={handleCloseClearModal}
               className="w-full py-4 bg-pastel-green border-3 border-pastel-green-border text-pastel-green-dark font-extrabold rounded-2xl text-base hover:bg-emerald-100/50 active:translate-y-[2px] transition-all bubbly-shadow cursor-pointer select-none"
             >
-              地図にもどる 🗺️
+              {isReview ? "ダッシュボードにもどる 🏠" : "地図にもどる 🗺️"}
             </button>
           </div>
         </div>
       )}
 
     </div>
+  );
+}
+
+export default function ExerciseScreen() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex-1 flex items-center justify-center bg-slate-50">
+          <div className="animate-spin rounded-full h-12 w-12 border-4 border-pastel-blue-border border-t-pastel-blue-dark" />
+        </div>
+      }
+    >
+      <ExerciseScreenContent />
+    </Suspense>
   );
 }

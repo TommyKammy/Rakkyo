@@ -1,6 +1,6 @@
 export interface QuestionData {
   id?: string;
-  type: 'MULTIPLE_CHOICE' | 'NUMBER_INPUT' | 'FILL_IN_BLANK';
+  type: 'MULTIPLE_CHOICE' | 'NUMBER_INPUT' | 'FILL_IN_BLANK' | 'SINGLE_CHOICE' | 'NUMERIC' | 'TEXT_SHORT' | 'FILL_BLANK';
   prompt: string;
   answers: string[];
   options: string[];

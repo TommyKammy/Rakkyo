@@ -30,14 +30,62 @@ export default function UnitRoadmap() {
   const router = useRouter();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [selectedUnit, setSelectedUnit] = useState<number>(1);
+  const [progress, setProgress] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // Math Units defined in the static curriculum package
+  // Dynamic Math Units based on live backend progress engine or defaults
+  const getUnitStatus = (id: number) => {
+    if (!progress || !progress.units) {
+      // Offline fallback defaults
+      if (id === 1) return { status: "completed" as const, rate: 100, grade: "S" };
+      if (id === 2) return { status: "active" as const, rate: 40, grade: "A" };
+      return { status: "locked" as const, rate: 0, grade: "-" };
+    }
+
+    const units = progress.units;
+    const u1 = units.find((u: any) => u.name.includes("正負"));
+    const u2 = units.find((u: any) => u.name.includes("文字"));
+    const u3 = units.find((u: any) => u.name.includes("方程式"));
+
+    if (id === 1) {
+      const rate = u1?.completionRate || 0;
+      return {
+        status: rate === 100 ? ("completed" as const) : ("active" as const),
+        rate,
+        grade: u1?.understandingLevel || "-"
+      };
+    }
+    if (id === 2) {
+      const u1Cleared = u1?.completionRate === 100;
+      const rate = u2?.completionRate || 0;
+      if (rate === 100) return { status: "completed" as const, rate, grade: u2?.understandingLevel || "-" };
+      return {
+        status: u1Cleared ? ("active" as const) : ("locked" as const),
+        rate,
+        grade: u2?.understandingLevel || "-"
+      };
+    }
+    // id === 3
+    const u2Cleared = u2?.completionRate === 100;
+    const rate = u3?.completionRate || 0;
+    if (rate === 100) return { status: "completed" as const, rate, grade: u3?.understandingLevel || "-" };
+    return {
+      status: u2Cleared ? ("active" as const) : ("locked" as const),
+      rate,
+      grade: u3?.understandingLevel || "-"
+      };
+  };
+
+  const u1Info = getUnitStatus(1);
+  const u2Info = getUnitStatus(2);
+  const u3Info = getUnitStatus(3);
+
   const units: UnitInfo[] = [
     {
       id: 1,
       name: "正負の数",
       description: "プラスとマイナスの数の世界を冒険しよう！",
-      status: "completed",
+      status: u1Info.status,
       lessonId: 1,
       badge: "❄️",
       colorTheme: {
@@ -52,7 +100,7 @@ export default function UnitRoadmap() {
       id: 2,
       name: "文字と式",
       description: "xやyを使って、いろいろな数量を式で表してみよう。",
-      status: "active",
+      status: u2Info.status,
       lessonId: 2,
       badge: "🌿",
       colorTheme: {
@@ -67,7 +115,7 @@ export default function UnitRoadmap() {
       id: 3,
       name: "一次方程式",
       description: "天秤のバランスを使って、わからない数xの正体を突き止めよう！",
-      status: "locked",
+      status: u3Info.status,
       lessonId: 3,
       badge: "⚖️",
       colorTheme: {
@@ -80,6 +128,24 @@ export default function UnitRoadmap() {
     },
   ];
 
+  const fetchProgress = async (token: string) => {
+    try {
+      const response = await fetch("http://localhost:4000/api/lessons/progress", {
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setProgress(data);
+      }
+    } catch (e) {
+      console.warn("⚠️ Failed to fetch progress from API. Using local default progress.", e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
     const token = localStorage.getItem("rakkyo_token");
     const userStr = localStorage.getItem("rakkyo_user");
@@ -91,6 +157,7 @@ export default function UnitRoadmap() {
 
     try {
       setUser(JSON.parse(userStr));
+      fetchProgress(token);
     } catch (e) {
       router.push("/");
     }

@@ -152,4 +152,73 @@ describe('Lessons Router /api/lessons', () => {
       expect(res2.body.fromCache).toBe(true);
     });
   });
+
+  describe('GET /api/lessons/progress', () => {
+    it('should return units progress data', async () => {
+      const res = await request(app)
+        .get('/api/lessons/progress')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('units');
+      expect(Array.isArray(res.body.units)).toBe(true);
+      if (res.body.units.length > 0) {
+        const unit = res.body.units[0];
+        expect(unit).toHaveProperty('id');
+        expect(unit).toHaveProperty('name');
+        expect(unit).toHaveProperty('completionRate');
+        expect(unit).toHaveProperty('understandingLevel');
+        expect(unit).toHaveProperty('lessons');
+        expect(Array.isArray(unit.lessons)).toBe(true);
+      }
+    });
+  });
+
+  describe('POST /api/lessons/submit with duration and review details', () => {
+    it('should store attempt with durationSeconds and reward bonus XP if isReview is true', async () => {
+      const res = await request(app)
+        .post('/api/lessons/submit')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          questionId: '$-5 + 3$ を計算しなさい。',
+          answerSubmitted: '-2',
+          hintsUsed: 0,
+          durationSeconds: 20,
+          isReview: true
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.isCorrect).toBe(true);
+      expect(res.body.xpAwarded).toBe(25); // 10 Base + 15 Review Bonus
+    });
+  });
+
+  describe('GET /api/lessons/reviews', () => {
+    it('should return incorrect or hint-heavy questions for review', async () => {
+      // First, submit an incorrect answer to trigger review recommendation
+      await request(app)
+        .post('/api/lessons/submit')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          questionId: '$(-6) \\times (-3)$ を計算しなさい。',
+          answerSubmitted: '999', // incorrect
+          hintsUsed: 1,
+          durationSeconds: 15
+        });
+
+      const res = await request(app)
+        .get('/api/lessons/reviews')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('questions');
+      expect(Array.isArray(res.body.questions)).toBe(true);
+      
+      const reviewQuestions = res.body.questions;
+      expect(reviewQuestions.length).toBeGreaterThan(0);
+      const targetReview = reviewQuestions.find((q: any) => q.id === '$(-6) \\times (-3)$ を計算しなさい。');
+      expect(targetReview).toBeDefined();
+      expect(targetReview.lastAttempt.isCorrect).toBe(false);
+    });
+  });
 });

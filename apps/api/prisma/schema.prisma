@@ -27,6 +27,7 @@ model Subject {
   id        String   @id @default(uuid())
   name      String
   code      String   @unique // e.g. "math", "english"
+  grade     Int      @default(1) // Grade 1, 2, 3
   isEnabled Boolean  @default(true)
   units     Unit[]
 }
@@ -55,6 +56,10 @@ enum QuestionType {
   MULTIPLE_CHOICE
   NUMBER_INPUT
   FILL_IN_BLANK
+  SINGLE_CHOICE
+  NUMERIC
+  TEXT_SHORT
+  FILL_BLANK
 }
 
 model Question {
@@ -79,6 +84,7 @@ model Attempt {
   isCorrect       Boolean
   hintsUsed       Int      @default(0)
   answerSubmitted String
+  durationSeconds Int?     // Time in seconds to complete the question
   createdAt       DateTime @default(now())
 }
 

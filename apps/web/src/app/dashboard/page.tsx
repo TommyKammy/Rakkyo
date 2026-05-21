@@ -19,6 +19,35 @@ export default function StudentDashboard() {
   const router = useRouter();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [mascotMessage, setMascotMessage] = useState("");
+  const [reviews, setReviews] = useState<any[]>([]);
+
+  const fetchReviews = async (token: string, userId: string) => {
+    try {
+      const response = await fetch("http://localhost:4000/api/lessons/reviews", {
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setReviews(data.questions || []);
+        return;
+      }
+    } catch (e) {
+      console.warn("⚠️ Failed to fetch reviews from API. Falling back to local attempt logic.");
+    }
+
+    // Local fallback review questions
+    setReviews([
+      {
+        id: "attempt_seed_8",
+        prompt: "$x = -3$ のとき、式 $5x + 4$ の値を求めなさい。",
+        type: "NUMBER_INPUT",
+        unitName: "文字の式",
+        lessonName: "文字を使った式",
+      }
+    ]);
+  };
 
   useEffect(() => {
     const token = localStorage.getItem("rakkyo_token");
@@ -32,6 +61,8 @@ export default function StudentDashboard() {
     try {
       const parsedUser: UserProfile = JSON.parse(userStr);
       setUser(parsedUser);
+      
+      fetchReviews(token, parsedUser.id);
 
       // Mascot dynamic messages based on current states
       const messages = [
@@ -40,7 +71,6 @@ export default function StudentDashboard() {
         `あと少しのXPでレベルアップできそうだよ！がんばろう！`,
         `今日は「方程式」のレッスンがおすすめだよ！天秤のパズルを解いてみよう！`,
       ];
-      // Set a random message initially, or default
       setMascotMessage(messages[0]);
     } catch (e) {
       localStorage.removeItem("rakkyo_token");
@@ -319,6 +349,54 @@ export default function StudentDashboard() {
         {/* Right 1 Column: Daily Mission & Badges Panel */}
         <div className="space-y-6">
           
+          {/* Review Mission Card */}
+          {reviews.length > 0 && (
+            <div className="bg-pastel-pink border-3 border-pastel-pink-border rounded-3xl p-6 bubbly-shadow space-y-4">
+              <h3 className="text-md font-extrabold text-pastel-pink-dark tracking-tight flex items-center gap-1.5 animate-pulse">
+                🔥 にがて克服ミッション！
+              </h3>
+              <div className="bg-white border-2 border-pastel-pink-border rounded-2xl p-4 flex flex-col gap-3 relative overflow-hidden">
+                <div className="flex gap-3 items-start">
+                  <div className="text-2xl mt-0.5">🧅</div>
+                  <div className="flex-1">
+                    <h5 className="font-extrabold text-sm text-slate-800 leading-tight">
+                      {reviews[0].unitName || "数と方程式"}
+                    </h5>
+                    <p className="text-2xs text-slate-400 font-semibold mt-0.5">
+                      復習候補：{reviews.length} 問
+                    </p>
+                    <p className="text-xs font-bold text-slate-600 mt-2 leading-relaxed">
+                      まちがえた問題や、ヒントをたくさん使った問題だよ！完璧にマスターしよう！
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="text-3xs bg-pastel-yellow border border-pastel-yellow-border text-pastel-yellow-dark px-2.5 py-1 rounded-full font-extrabold self-start flex items-center gap-1">
+                  <span>💎 報酬:</span>
+                  <span>クリア時に +15 XP ボーナス！</span>
+                </div>
+
+                <button
+                  onClick={() => {
+                    const getLessonUrlId = (unitName: string) => {
+                      if (!unitName) return 1;
+                      if (unitName.includes("正負")) return 1;
+                      if (unitName.includes("文字")) return 2;
+                      if (unitName.includes("方程式")) return 3;
+                      return 1;
+                    };
+                    const firstReview = reviews[0];
+                    const urlId = getLessonUrlId(firstReview.unitName || firstReview.unitId || "");
+                    router.push(`/lesson/${urlId}?review=true`);
+                  }}
+                  className="w-full py-3 bg-pastel-pink-dark border-2 border-rose-700 text-white font-extrabold rounded-2xl text-xs active:translate-y-[2px] transition-all bubbly-shadow cursor-pointer text-center select-none"
+                >
+                  にがてを克服する！ 💪
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Daily Mission Card */}
           <div className="bg-pastel-yellow border-3 border-pastel-yellow-border rounded-3xl p-6 bubbly-shadow space-y-4">
             <h3 className="text-md font-extrabold text-pastel-yellow-dark tracking-tight flex items-center gap-1.5">
