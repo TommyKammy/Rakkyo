@@ -1,26 +1,81 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@theme {
+  --font-sans: var(--font-quicksand), system-ui, -apple-system, sans-serif;
+  
+  --color-pastel-blue: #f0f9ff;
+  --color-pastel-blue-border: #bae6fd;
+  --color-pastel-blue-dark: #0284c7;
+  
+  --color-pastel-purple: #faf5ff;
+  --color-pastel-purple-border: #e9d5ff;
+  --color-pastel-purple-dark: #7c3aed;
+  
+  --color-pastel-pink: #fdf2f8;
+  --color-pastel-pink-border: #fbcfe8;
+  --color-pastel-pink-dark: #db2777;
+  
+  --color-pastel-green: #f0fdf4;
+  --color-pastel-green-border: #bbf7d0;
+  --color-pastel-green-dark: #16a34a;
+  
+  --color-pastel-yellow: #fefce8;
+  --color-pastel-yellow-border: #fef08a;
+  --color-pastel-yellow-dark: #ca8a04;
+  
+  --color-pastel-orange: #fff7ed;
+  --color-pastel-orange-border: #fed7aa;
+  --color-pastel-orange-dark: #ea580c;
+  
+  --animate-float: float 4s ease-in-out infinite;
+  --animate-bounce-gentle: bounce-gentle 2.5s ease-in-out infinite;
+  --animate-wiggle: wiggle 1s ease-in-out infinite;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  @keyframes float {
+    0%, 100% { transform: translateY(0px) rotate(0deg); }
+    50% { transform: translateY(-8px) rotate(1.5deg); }
+  }
+  @keyframes bounce-gentle {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+  @keyframes wiggle {
+    0%, 100% { transform: rotate(-3deg); }
+    50% { transform: rotate(3deg); }
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  background-color: #fbfbfa;
+  background-image: radial-gradient(#e5e7eb 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Playful Bubbly Buttons & Cards */
+.bubbly-shadow {
+  box-shadow: 0 4px 0 0 rgba(0, 0, 0, 0.05);
+}
+.bubbly-shadow-md {
+  box-shadow: 0 6px 0 0 rgba(0, 0, 0, 0.08);
+}
+.bubbly-shadow-lg {
+  box-shadow: 0 8px 0 0 rgba(0, 0, 0, 0.08);
 }

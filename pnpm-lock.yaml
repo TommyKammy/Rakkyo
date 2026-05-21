@@ -81,6 +81,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@rakkyo/curriculum':
+        specifier: workspace:*
+        version: link:../../packages/curriculum
       next:
         specifier: 16.2.6
         version: 16.2.6(@babel/core@7.29.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
