@@ -15,6 +15,7 @@
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "@rakkyo/curriculum": "workspace:*",
+    "@rakkyo/ai-tutor": "workspace:*",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",

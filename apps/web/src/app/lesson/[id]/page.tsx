@@ -78,6 +78,46 @@ export default function ExerciseScreen() {
   const [showHintPanel, setShowHintPanel] = useState(false);
   const [hintStage, setHintStage] = useState<1 | 2 | 3>(1);
   const [showFinalAnswer, setShowFinalAnswer] = useState(false);
+  const [aiHints, setAiHints] = useState<{ [key: number]: string }>({});
+  const [isLoadingHint, setIsLoadingHint] = useState(false);
+
+  const fetchHint = async (stageNum: 1 | 2 | 3) => {
+    if (aiHints[stageNum]) return; // Already fetched
+
+    const token = localStorage.getItem("rakkyo_token");
+    if (!token || !questions[currentQIdx]) return;
+
+    setIsLoadingHint(true);
+    try {
+      const q = questions[currentQIdx];
+      const response = await fetch("http://localhost:4000/api/lessons/hint", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          questionId: q.id || q.prompt,
+          hintsUsed: stageNum - 1
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setAiHints(prev => ({ ...prev, [stageNum]: data.hintText }));
+      }
+    } catch (e) {
+      console.warn("⚠️ Failed to fetch AI hint. Falling back to static curriculum hints.", e);
+    } finally {
+      setIsLoadingHint(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showHintPanel) {
+      fetchHint(hintStage);
+    }
+  }, [showHintPanel, hintStage, currentQIdx]);
 
   useEffect(() => {
     const token = localStorage.getItem("rakkyo_token");
@@ -105,7 +145,7 @@ export default function ExerciseScreen() {
 
   const currentQuestion = questions[currentQIdx];
 
-  const handleCheckAnswer = () => {
+  const handleCheckAnswer = async () => {
     if (isChecked) return;
 
     let submitted = "";
@@ -117,7 +157,10 @@ export default function ExerciseScreen() {
       submitted = textAnswer.trim();
     }
 
-    // Check against accepted curriculum answers list
+    const token = localStorage.getItem("rakkyo_token");
+    const hintsUsed = showHintPanel ? hintStage : 0;
+
+    // Check locally first for instant evaluation/fallback
     const isAnsCorrect = currentQuestion.answers.some(
       (ans) => ans.toLowerCase().trim() === submitted.toLowerCase().trim()
     );
@@ -125,6 +168,40 @@ export default function ExerciseScreen() {
     setIsCorrect(isAnsCorrect);
     setIsChecked(true);
 
+    if (token) {
+      try {
+        const response = await fetch("http://localhost:4000/api/lessons/submit", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            questionId: currentQuestion.id || currentQuestion.prompt,
+            answerSubmitted: submitted,
+            hintsUsed
+          })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setIsCorrect(data.isCorrect);
+
+          if (data.leveledUp) {
+            setLevelUpTo(data.user.level);
+            setShowLevelUpModal(true);
+          }
+
+          setUser(data.user);
+          localStorage.setItem("rakkyo_user", JSON.stringify(data.user));
+          return;
+        }
+      } catch (error) {
+        console.warn("⚠️ API submission failed. Falling back to offline client-side evaluation.", error);
+      }
+    }
+
+    // Local fallback evaluation (offline mode)
     if (isAnsCorrect) {
       // Award +10 XP
       const updatedUser = { ...user };
@@ -153,6 +230,7 @@ export default function ExerciseScreen() {
     setShowHintPanel(false);
     setHintStage(1);
     setShowFinalAnswer(false);
+    setAiHints({});
 
     if (currentQIdx + 1 < questions.length) {
       setCurrentQIdx(currentQIdx + 1);
@@ -401,9 +479,16 @@ export default function ExerciseScreen() {
                     <p className="text-3xs bg-pastel-blue text-pastel-blue-dark border border-pastel-blue-border font-extrabold rounded-full px-2 py-0.5 inline-block">
                       ヒント①：問題のいいかえ
                     </p>
-                    <p className="text-xs font-bold text-slate-600 leading-relaxed">
-                      {currentQuestion.hints[0]}
-                    </p>
+                    {hintStage === 1 && isLoadingHint && !aiHints[1] ? (
+                      <div className="flex items-center gap-2 text-xs text-slate-400 font-bold py-2">
+                        <span className="animate-spin rounded-full h-4 w-4 border-2 border-pastel-blue-border border-t-pastel-blue-dark" />
+                        <span>ラッキョくんが考え中... 🧅</span>
+                      </div>
+                    ) : (
+                      <p className="text-xs font-bold text-slate-600 leading-relaxed">
+                        {aiHints[1] || currentQuestion.hints[0]}
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -413,9 +498,16 @@ export default function ExerciseScreen() {
                     <p className="text-3xs bg-pastel-green text-pastel-green-dark border border-pastel-green-border font-extrabold rounded-full px-2 py-0.5 inline-block">
                       ヒント②：考え方の図解
                     </p>
-                    <p className="text-xs font-bold text-slate-600 leading-relaxed">
-                      {currentQuestion.hints[1]}
-                    </p>
+                    {hintStage === 2 && isLoadingHint && !aiHints[2] ? (
+                      <div className="flex items-center gap-2 text-xs text-slate-400 font-bold py-2">
+                        <span className="animate-spin rounded-full h-4 w-4 border-2 border-pastel-green-border border-t-pastel-green-dark" />
+                        <span>ラッキョくんが考え中... 🧅</span>
+                      </div>
+                    ) : (
+                      <p className="text-xs font-bold text-slate-600 leading-relaxed">
+                        {aiHints[2] || currentQuestion.hints[1]}
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -425,9 +517,16 @@ export default function ExerciseScreen() {
                     <p className="text-3xs bg-pastel-pink text-pastel-pink-dark border border-pastel-pink-border font-extrabold rounded-full px-2 py-0.5 inline-block">
                       ヒント③：解き方のステップ
                     </p>
-                    <p className="text-xs font-bold text-slate-600 leading-relaxed">
-                      {currentQuestion.hints[2]}
-                    </p>
+                    {hintStage === 3 && isLoadingHint && !aiHints[3] ? (
+                      <div className="flex items-center gap-2 text-xs text-slate-400 font-bold py-2">
+                        <span className="animate-spin rounded-full h-4 w-4 border-2 border-pastel-pink-border border-t-pastel-pink-dark" />
+                        <span>ラッキョくんが考え中... 🧅</span>
+                      </div>
+                    ) : (
+                      <p className="text-xs font-bold text-slate-600 leading-relaxed">
+                        {aiHints[3] || currentQuestion.hints[2]}
+                      </p>
+                    )}
                   </div>
                 )}
 
