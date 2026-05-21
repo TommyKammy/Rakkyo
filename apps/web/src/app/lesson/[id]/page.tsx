@@ -288,7 +288,7 @@ function ExerciseScreenContent() {
         const rec = new SpeechRecognition();
         rec.continuous = false;
         rec.interimResults = false;
-        rec.lang = subjectCode === "english" ? "en-US" : "ja-JP";
+        rec.lang = "ja-JP"; // Speak in Japanese across all subjects to allow easy dialogue with tutor
 
         rec.onstart = () => {
           setIsListening(true);
@@ -346,38 +346,23 @@ function ExerciseScreenContent() {
     }
 
     const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.lang = subjectCode === "english" ? "en-US" : "ja-JP";
-    utterance.rate = subjectCode === "english" ? 0.9 : 0.85; // Slightly slower for comprehension
+    utterance.lang = "ja-JP"; // Speak in Japanese across all subjects (including English) as requested by the user
+    utterance.rate = 0.85; // Slightly slower for comprehension
 
-    // Explicitly bind localized voices to prevent cross-language synthesizer rendering issues (e.g. Japanese voice reading English words)
+    // Explicitly bind localized voices to prevent cross-language synthesizer rendering issues
     const availableVoices = voices.length > 0 ? voices : (typeof window !== "undefined" && window.speechSynthesis ? window.speechSynthesis.getVoices() : []);
     if (availableVoices.length > 0) {
-      if (subjectCode === "english") {
-        // Prefer exact en-US, then any en voice
-        const enVoice = availableVoices.find(v => {
-          const langLower = v.lang.toLowerCase().replace("_", "-");
-          return langLower === "en-us";
-        }) || availableVoices.find(v => {
-          const langLower = v.lang.toLowerCase().replace("_", "-");
-          return langLower.startsWith("en");
-        });
-        if (enVoice) {
-          utterance.voice = enVoice;
-          utterance.lang = enVoice.lang; // Align utterance lang precisely with voice lang to prevent browser-level fallback overrides
-        }
-      } else {
-        // Prefer exact ja-JP, then any ja voice
-        const jaVoice = availableVoices.find(v => {
-          const langLower = v.lang.toLowerCase().replace("_", "-");
-          return langLower === "ja-jp";
-        }) || availableVoices.find(v => {
-          const langLower = v.lang.toLowerCase().replace("_", "-");
-          return langLower.startsWith("ja");
-        });
-        if (jaVoice) {
-          utterance.voice = jaVoice;
-          utterance.lang = jaVoice.lang; // Align utterance lang precisely with voice lang to prevent browser-level fallback overrides
-        }
+      // Prefer exact ja-JP, then any ja voice
+      const jaVoice = availableVoices.find(v => {
+        const langLower = v.lang.toLowerCase().replace("_", "-");
+        return langLower === "ja-jp";
+      }) || availableVoices.find(v => {
+        const langLower = v.lang.toLowerCase().replace("_", "-");
+        return langLower.startsWith("ja");
+      });
+      if (jaVoice) {
+        utterance.voice = jaVoice;
+        utterance.lang = jaVoice.lang; // Align utterance lang precisely with voice lang
       }
     }
 
