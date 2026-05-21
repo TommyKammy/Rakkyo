@@ -2,7 +2,13 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { mathGrade1Curriculum } from "@rakkyo/curriculum";
+import { 
+  mathGrade1Curriculum,
+  englishGrade1Curriculum,
+  scienceGrade1Curriculum,
+  socialGrade1Curriculum,
+  japaneseGrade1Curriculum
+} from "@rakkyo/curriculum";
 import { NumberLineDiagram, AlgebraScaleDiagram, CoordinatePlaneDiagram } from "../../../components/diagrams";
 
 // Helper to detect math diagram types based on curriculum contents
@@ -81,19 +87,114 @@ interface UserProfile {
   isMock?: boolean;
 }
 
+const subjectThemes: Record<string, {
+  bg: string;
+  border: string;
+  text: string;
+  darkText: string;
+  btnBg: string;
+  btnBorder: string;
+  btnText: string;
+  btnHover: string;
+  progressBg: string;
+}> = {
+  math: {
+    bg: "bg-pastel-green",
+    border: "border-pastel-green-border",
+    text: "text-pastel-green-dark",
+    darkText: "text-pastel-green-dark",
+    btnBg: "bg-pastel-green",
+    btnBorder: "border-pastel-green-border",
+    btnText: "text-pastel-green-dark",
+    btnHover: "hover:bg-emerald-100/50",
+    progressBg: "bg-pastel-green-dark"
+  },
+  english: {
+    bg: "bg-pastel-purple",
+    border: "border-pastel-purple-border",
+    text: "text-pastel-purple-dark",
+    darkText: "text-pastel-purple-dark",
+    btnBg: "bg-pastel-purple",
+    btnBorder: "border-pastel-purple-border",
+    btnText: "text-pastel-purple-dark",
+    btnHover: "hover:bg-indigo-100/50",
+    progressBg: "bg-indigo-500"
+  },
+  science: {
+    bg: "bg-pastel-blue",
+    border: "border-pastel-blue-border",
+    text: "text-pastel-blue-dark",
+    darkText: "text-pastel-blue-dark",
+    btnBg: "bg-pastel-blue",
+    btnBorder: "border-pastel-blue-border",
+    btnText: "text-pastel-blue-dark",
+    btnHover: "hover:bg-sky-100/50",
+    progressBg: "bg-sky-400"
+  },
+  social: {
+    bg: "bg-pastel-orange",
+    border: "border-pastel-orange-border",
+    text: "text-pastel-orange-dark",
+    darkText: "text-pastel-orange-dark",
+    btnBg: "bg-pastel-orange",
+    btnBorder: "border-pastel-orange-border",
+    btnText: "text-pastel-orange-dark",
+    btnHover: "hover:bg-amber-100/50",
+    progressBg: "bg-amber-500"
+  },
+  japanese: {
+    bg: "bg-pastel-pink",
+    border: "border-pastel-pink-border",
+    text: "text-pastel-pink-dark",
+    darkText: "text-pastel-pink-dark",
+    btnBg: "bg-pastel-pink",
+    btnBorder: "border-pastel-pink-border",
+    btnText: "text-pastel-pink-dark",
+    btnHover: "hover:bg-pink-100/50",
+    progressBg: "bg-pink-400"
+  }
+};
+
 function ExerciseScreenContent() {
   const router = useRouter();
   const { id } = useParams();
   const searchParams = useSearchParams();
   const isReview = searchParams?.get("review") === "true";
   const lessonIdStr = Array.isArray(id) ? id[0] : id;
-  const lessonIndex = parseInt(lessonIdStr || "1") - 1;
+  const lessonIdVal = parseInt(lessonIdStr || "1");
 
-  // Retrieve matching unit & lesson questions from the curriculum package
-  const subject = mathGrade1Curriculum;
-  const unit = subject.units[lessonIndex];
+  // Determine subject and lesson index within the subject based on 1-15 scale
+  let subject = mathGrade1Curriculum;
+  let subjectCode = "math";
+  let unitIndex = 0;
+
+  if (lessonIdVal >= 1 && lessonIdVal <= 3) {
+    subject = mathGrade1Curriculum;
+    subjectCode = "math";
+    unitIndex = lessonIdVal - 1;
+  } else if (lessonIdVal >= 4 && lessonIdVal <= 6) {
+    subject = englishGrade1Curriculum;
+    subjectCode = "english";
+    unitIndex = lessonIdVal - 4;
+  } else if (lessonIdVal >= 7 && lessonIdVal <= 9) {
+    subject = scienceGrade1Curriculum;
+    subjectCode = "science";
+    unitIndex = lessonIdVal - 7;
+  } else if (lessonIdVal >= 10 && lessonIdVal <= 12) {
+    subject = socialGrade1Curriculum;
+    subjectCode = "social";
+    unitIndex = lessonIdVal - 10;
+  } else if (lessonIdVal >= 13 && lessonIdVal <= 15) {
+    subject = japaneseGrade1Curriculum;
+    subjectCode = "japanese";
+    unitIndex = lessonIdVal - 13;
+  }
+
+  const unit = subject.units[unitIndex];
   const lesson = unit?.lessons[0];
   const questions = lesson?.questions || [];
+
+  const theme = subjectThemes[subjectCode] || subjectThemes.math;
 
   // User details
   const [user, setUser] = useState<UserProfile | null>(null);
@@ -135,7 +236,7 @@ function ExerciseScreenContent() {
         const rec = new SpeechRecognition();
         rec.continuous = false;
         rec.interimResults = false;
-        rec.lang = "ja-JP";
+        rec.lang = subjectCode === "english" ? "en-US" : "ja-JP";
 
         rec.onstart = () => {
           setIsListening(true);
@@ -164,7 +265,7 @@ function ExerciseScreenContent() {
         window.speechSynthesis.cancel();
       }
     };
-  }, []);
+  }, [subjectCode]);
 
   const speakText = (text: string, id: string) => {
     if (typeof window === "undefined" || !window.speechSynthesis) return;
@@ -178,18 +279,23 @@ function ExerciseScreenContent() {
     window.speechSynthesis.cancel();
 
     // Clean text from LaTeX segments to make TTS flow nicely
-    const cleanText = text
-      .replace(/\$/g, "")
-      .replace(/\\times/g, "かける")
-      .replace(/\\div/g, "わる")
-      .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, "$2分の$1")
-      .replace(/x/g, "エックス")
-      .replace(/y/g, "ワイ")
-      .replace(/-/g, "マイナス");
+    let cleanText = text;
+    if (subjectCode === "english") {
+      cleanText = text.replace(/\$/g, "");
+    } else {
+      cleanText = text
+        .replace(/\$/g, "")
+        .replace(/\\times/g, "かける")
+        .replace(/\\div/g, "わる")
+        .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, "$2分の$1")
+        .replace(/x/g, "エックス")
+        .replace(/y/g, "ワイ")
+        .replace(/-/g, "マイナス");
+    }
 
     const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.lang = "ja-JP";
-    utterance.rate = 0.85; // Slightly slower, perfect for middle school students
+    utterance.lang = subjectCode === "english" ? "en-US" : "ja-JP";
+    utterance.rate = subjectCode === "english" ? 0.9 : 0.85; // Slightly slower for comprehension
 
     utterance.onend = () => {
       setIsPlayingTts(null);
@@ -311,7 +417,7 @@ function ExerciseScreenContent() {
     const userStr = localStorage.getItem("rakkyo_user");
 
     if (!token || !userStr || !unit || !lesson) {
-      router.push("/math");
+      router.push(`/${subjectCode}`);
       return;
     }
 
@@ -320,7 +426,7 @@ function ExerciseScreenContent() {
     } catch (e) {
       router.push("/");
     }
-  }, [router, lessonIndex, unit, lesson]);
+  }, [router, subjectCode, unit, lesson]);
 
   if (!user || questions.length === 0) {
     return (
@@ -443,20 +549,20 @@ function ExerciseScreenContent() {
 
   const handleCloseClearModal = () => {
     setShowClearModal(false);
-    router.push("/math");
+    router.push(`/${subjectCode}`);
   };
 
   return (
     <div className="flex-1 flex flex-col p-4 sm:p-6 md:p-8 max-w-5xl w-full mx-auto space-y-6 select-none relative">
       
       {/* Background blobs */}
-      <div className="absolute top-[20%] left-[-5%] w-[30%] h-[30%] rounded-full bg-pastel-pink opacity-30 blur-3xl -z-10" />
+      <div className={`absolute top-[20%] left-[-5%] w-[30%] h-[30%] rounded-full ${theme.bg} opacity-30 blur-3xl -z-10`} />
       <div className="absolute bottom-[20%] right-[-5%] w-[30%] h-[30%] rounded-full bg-pastel-blue opacity-30 blur-3xl -z-10" />
 
       {/* 1. Header (Navigation & Progress tracker) */}
       <header className="bg-white border-3 border-slate-100 rounded-3xl p-4 flex items-center justify-between gap-4 bubbly-shadow">
         <button
-          onClick={() => router.push("/math")}
+          onClick={() => router.push(`/${subjectCode}`)}
           className="px-4 py-2 bg-slate-50 border-2 border-slate-200 text-slate-500 font-extrabold rounded-2xl text-xs hover:bg-slate-100 active:translate-y-[2px] transition-all cursor-pointer bubbly-shadow"
         >
           ◀ 地図にもどる
@@ -471,7 +577,7 @@ function ExerciseScreenContent() {
           <div className="h-4 w-full bg-slate-100 border border-slate-200 rounded-full p-0.5 overflow-hidden">
             <div
               style={{ width: `${((currentQIdx + 1) / questions.length) * 100}%` }}
-              className="h-full bg-pastel-green-dark rounded-full transition-all duration-300"
+              className={`h-full ${theme.progressBg} rounded-full transition-all duration-300`}
             />
           </div>
         </div>
@@ -746,7 +852,7 @@ function ExerciseScreenContent() {
                           {aiHints[2] || currentQuestion.hints[1]}
                         </p>
                         <div className="mt-2 animate-wiggle-once">
-                          {getMathDiagram(currentQuestion.prompt, currentQuestion.explanation)}
+                          {subjectCode === "math" && getMathDiagram(currentQuestion.prompt, currentQuestion.explanation)}
                         </div>
                       </div>
                     )}

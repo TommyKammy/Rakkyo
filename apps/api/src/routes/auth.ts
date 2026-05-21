@@ -30,6 +30,9 @@ router.post('/register', async (req, res, next) => {
     let isMock = false;
 
     try {
+      if (process.env.NODE_ENV === 'test') {
+        throw new Error('Test environment: Forcing Mock DB');
+      }
       const existingUser = await prisma.user.findUnique({
         where: { email: parsed.email }
       });
@@ -97,6 +100,9 @@ router.post('/login', async (req, res, next) => {
     let isMock = false;
 
     try {
+      if (process.env.NODE_ENV === 'test') {
+        throw new Error('Test environment: Forcing Mock DB');
+      }
       user = await prisma.user.findUnique({
         where: { email: parsed.email }
       });

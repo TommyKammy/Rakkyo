@@ -26,6 +26,9 @@ export async function authMiddleware(req: AuthenticatedRequest, res: Response, n
     req.isMock = false;
 
     try {
+      if (process.env.NODE_ENV === 'test') {
+        throw new Error('Test environment: Forcing Mock DB');
+      }
       const user = await prisma.user.findUnique({
         where: { id: decoded.userId }
       });

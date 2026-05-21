@@ -273,73 +273,120 @@ export default function StudentDashboard() {
                 </button>
               </div>
 
-              {/* English (COMING SOON) */}
-              <div className="bg-slate-50 border-3 border-slate-200/60 rounded-3xl p-5 flex flex-col justify-between h-48 select-none relative overflow-hidden opacity-75">
-                <div className="absolute right-[-10px] bottom-[-10px] opacity-10 text-7xl font-bold">
+              {/* English (ACTIVE) */}
+              <div className="bg-pastel-purple border-3 border-pastel-purple-border rounded-3xl p-5 bubbly-shadow flex flex-col justify-between h-48 hover:scale-[1.02] transition-transform select-none relative overflow-hidden">
+                <div className="absolute right-[-10px] bottom-[-10px] opacity-15 text-7xl font-bold">
                   🇬🇧
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs bg-slate-200 text-slate-400 border border-slate-300 px-2.5 py-0.5 rounded-full font-extrabold tracking-wider">
-                      中1英語 🔒
+                    <span className="text-xs bg-purple-500/10 text-pastel-purple-dark border border-pastel-purple-border px-2.5 py-0.5 rounded-full font-extrabold tracking-wider">
+                      中1英語
+                    </span>
+                    <span className="text-xs text-slate-400 font-extrabold">
+                      問題数 30問
                     </span>
                   </div>
-                  <h4 className="text-lg font-extrabold text-slate-400">
+                  <h4 className="text-lg font-extrabold text-slate-800">
                     アルファベットと言葉
                   </h4>
-                  <p className="text-xs text-slate-300 font-semibold mt-1">
-                    文法や会話のスペルパズル。準備中なのでお楽しみに！
+                  <p className="text-xs text-slate-500 font-semibold mt-1 leading-relaxed">
+                    英単語のスペルや挨拶、be動詞と一般動詞の会話パズル！
                   </p>
                 </div>
-                <div className="w-full py-3 bg-slate-200 border-2 border-slate-300 text-slate-400 font-extrabold rounded-2xl text-sm text-center select-none cursor-not-allowed">
-                  Coming Soon...
-                </div>
+                <button
+                  onClick={() => router.push("/english")}
+                  className="w-full py-3 bg-pastel-purple-dark border-2 border-purple-700 text-white font-extrabold rounded-2xl text-sm active:translate-y-[2px] transition-all bubbly-shadow cursor-pointer text-center select-none"
+                >
+                  冒険をはじめる！ 🗺️
+                </button>
               </div>
 
-              {/* Science (COMING SOON) */}
-              <div className="bg-slate-50 border-3 border-slate-200/60 rounded-3xl p-5 flex flex-col justify-between h-48 select-none relative overflow-hidden opacity-75">
-                <div className="absolute right-[-10px] bottom-[-10px] opacity-10 text-7xl font-bold">
+              {/* Science (ACTIVE) */}
+              <div className="bg-pastel-blue border-3 border-pastel-blue-border rounded-3xl p-5 bubbly-shadow flex flex-col justify-between h-48 hover:scale-[1.02] transition-transform select-none relative overflow-hidden">
+                <div className="absolute right-[-10px] bottom-[-10px] opacity-15 text-7xl font-bold">
                   🧪
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs bg-slate-200 text-slate-400 border border-slate-300 px-2.5 py-0.5 rounded-full font-extrabold tracking-wider">
-                      中1理科 🔒
+                    <span className="text-xs bg-sky-500/10 text-pastel-blue-dark border border-pastel-blue-border px-2.5 py-0.5 rounded-full font-extrabold tracking-wider">
+                      中1理科
+                    </span>
+                    <span className="text-xs text-slate-400 font-extrabold">
+                      問題数 30問
                     </span>
                   </div>
-                  <h4 className="text-lg font-extrabold text-slate-400">
+                  <h4 className="text-lg font-extrabold text-slate-800">
                     身のまわりの不思議
                   </h4>
-                  <p className="text-xs text-slate-300 font-semibold mt-1">
-                    光や音、物質のなぞを科学の力で解き明かそう！
+                  <p className="text-xs text-slate-500 font-semibold mt-1 leading-relaxed">
+                    身のまわりの植物、光や音、物質のなぞを解き明かそう！
                   </p>
                 </div>
-                <div className="w-full py-3 bg-slate-200 border-2 border-slate-300 text-slate-400 font-extrabold rounded-2xl text-sm text-center select-none cursor-not-allowed">
-                  Coming Soon...
-                </div>
+                <button
+                  onClick={() => router.push("/science")}
+                  className="w-full py-3 bg-pastel-blue-dark border-2 border-sky-700 text-white font-extrabold rounded-2xl text-sm active:translate-y-[2px] transition-all bubbly-shadow cursor-pointer text-center select-none"
+                >
+                  冒険をはじめる！ 🗺️
+                </button>
               </div>
 
-              {/* Japanese/Social Studies Combined (COMING SOON) */}
-              <div className="bg-slate-50 border-3 border-slate-200/60 rounded-3xl p-5 flex flex-col justify-between h-48 select-none relative overflow-hidden opacity-75">
-                <div className="absolute right-[-10px] bottom-[-10px] opacity-10 text-7xl font-bold">
+              {/* Social Studies (ACTIVE) */}
+              <div className="bg-pastel-orange border-3 border-pastel-orange-border rounded-3xl p-5 bubbly-shadow flex flex-col justify-between h-48 hover:scale-[1.02] transition-transform select-none relative overflow-hidden">
+                <div className="absolute right-[-10px] bottom-[-10px] opacity-15 text-7xl font-bold">
+                  🧭
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs bg-amber-500/10 text-pastel-orange-dark border border-pastel-orange-border px-2.5 py-0.5 rounded-full font-extrabold tracking-wider">
+                      中1社会
+                    </span>
+                    <span className="text-xs text-slate-400 font-extrabold">
+                      問題数 30問
+                    </span>
+                  </div>
+                  <h4 className="text-lg font-extrabold text-slate-800">
+                    世界の地理と歴史
+                  </h4>
+                  <p className="text-xs text-slate-500 font-semibold mt-1 leading-relaxed">
+                    世界の国々や歴史の流れ、くらしの工夫を発見する旅へ！
+                  </p>
+                </div>
+                <button
+                  onClick={() => router.push("/social")}
+                  className="w-full py-3 bg-pastel-orange-dark border-2 border-amber-700 text-white font-extrabold rounded-2xl text-sm active:translate-y-[2px] transition-all bubbly-shadow cursor-pointer text-center select-none"
+                >
+                  冒険をはじめる！ 🗺️
+                </button>
+              </div>
+
+              {/* Japanese (ACTIVE) */}
+              <div className="bg-pastel-pink border-3 border-pastel-pink-border rounded-3xl p-5 bubbly-shadow flex flex-col justify-between h-48 hover:scale-[1.02] transition-transform select-none relative overflow-hidden sm:col-span-2">
+                <div className="absolute right-[-10px] bottom-[-10px] opacity-15 text-7xl font-bold">
                   🎌
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs bg-slate-200 text-slate-400 border border-slate-300 px-2.5 py-0.5 rounded-full font-extrabold tracking-wider">
-                      国語・社会 🔒
+                    <span className="text-xs bg-rose-500/10 text-pastel-pink-dark border border-pastel-pink-border px-2.5 py-0.5 rounded-full font-extrabold tracking-wider">
+                      中1国語
+                    </span>
+                    <span className="text-xs text-slate-400 font-extrabold">
+                      問題数 30問
                     </span>
                   </div>
-                  <h4 className="text-lg font-extrabold text-slate-400">
-                    ことばと言葉の歴史
+                  <h4 className="text-lg font-extrabold text-slate-800">
+                    ことばと言葉の冒険
                   </h4>
-                  <p className="text-xs text-slate-300 font-semibold mt-1">
-                    感じ方や歴史探検。次のアップデートまで待っててね！
+                  <p className="text-xs text-slate-500 font-semibold mt-1 leading-relaxed">
+                    漢字や語彙、言葉のきまり、文章の正しい読み解き方をマスターしよう！
                   </p>
                 </div>
-                <div className="w-full py-3 bg-slate-200 border-2 border-slate-300 text-slate-400 font-extrabold rounded-2xl text-sm text-center select-none cursor-not-allowed">
-                  Coming Soon...
-                </div>
+                <button
+                  onClick={() => router.push("/japanese")}
+                  className="w-full py-3 bg-pastel-pink-dark border-2 border-rose-700 text-white font-extrabold rounded-2xl text-sm active:translate-y-[2px] transition-all bubbly-shadow cursor-pointer text-center select-none mt-2"
+                >
+                  冒険をはじめる！ 🗺️
+                </button>
               </div>
 
             </div>

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import prisma from '../db';
 import { mockDb } from '../mockDb';
 import { authMiddleware, AuthenticatedRequest } from '../middlewares/auth';
-import { mathGrade1Curriculum } from '@rakkyo/curriculum';
+import { allCurriculums } from '@rakkyo/curriculum';
 import { AiTutorProviderFactory, AiResponseCache, SafetyFilter } from '@rakkyo/ai-tutor';
 
 const router = Router();
@@ -53,18 +53,21 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
 
     // Fallback: Search in @rakkyo/curriculum static data if not found or in Mock mode
     if (!foundQuestion) {
-      for (const unit of mathGrade1Curriculum.units) {
-        for (const lesson of unit.lessons) {
-          const q = lesson.questions.find(
-            quest => quest.id === parsed.questionId || quest.prompt === parsed.questionId
-          );
-          if (q) {
-            foundQuestion = q;
-            isCorrect = q.answers.some(
-              ans => ans.toLowerCase().trim() === parsed.answerSubmitted.toLowerCase().trim()
+      for (const curriculum of allCurriculums) {
+        for (const unit of curriculum.units) {
+          for (const lesson of unit.lessons) {
+            const q = lesson.questions.find(
+              quest => quest.id === parsed.questionId || quest.prompt === parsed.questionId
             );
-            break;
+            if (q) {
+              foundQuestion = q;
+              isCorrect = q.answers.some(
+                ans => ans.toLowerCase().trim() === parsed.answerSubmitted.toLowerCase().trim()
+              );
+              break;
+            }
           }
+          if (foundQuestion) break;
         }
         if (foundQuestion) break;
       }
@@ -303,27 +306,46 @@ router.post('/hint', authMiddleware, async (req: AuthenticatedRequest, res: Resp
       }
     }
 
+    let subjectCode = 'math';
     let foundQuestion = null;
     if (!req.isMock) {
       try {
         foundQuestion = await prisma.question.findUnique({
-          where: { id: parsed.questionId }
+          where: { id: parsed.questionId },
+          include: {
+            lesson: {
+              include: {
+                unit: {
+                  include: {
+                    subject: true
+                  }
+                }
+              }
+            }
+          }
         });
+        if (foundQuestion && (foundQuestion as any).lesson?.unit?.subject?.code) {
+          subjectCode = (foundQuestion as any).lesson.unit.subject.code;
+        }
       } catch (dbError) {
         console.warn('⚠️ DB query failed for hint question. Falling back to local curriculum.');
       }
     }
 
     if (!foundQuestion) {
-      for (const unit of mathGrade1Curriculum.units) {
-        for (const lesson of unit.lessons) {
-          const q = lesson.questions.find(
-            quest => quest.id === parsed.questionId || quest.prompt === parsed.questionId
-          );
-          if (q) {
-            foundQuestion = q;
-            break;
+      for (const curriculum of allCurriculums) {
+        for (const unit of curriculum.units) {
+          for (const lesson of unit.lessons) {
+            const q = lesson.questions.find(
+              quest => quest.id === parsed.questionId || quest.prompt === parsed.questionId
+            );
+            if (q) {
+              foundQuestion = q;
+              subjectCode = curriculum.code;
+              break;
+            }
           }
+          if (foundQuestion) break;
         }
         if (foundQuestion) break;
       }
@@ -344,7 +366,7 @@ router.post('/hint', authMiddleware, async (req: AuthenticatedRequest, res: Resp
       answers: foundQuestion.answers,
       hintsUsed: parsed.hintsUsed,
       staticHints: foundQuestion.hints,
-      subjectCode: 'math',
+      subjectCode,
       userQuestion: parsed.userQuestion
     });
 
@@ -384,11 +406,12 @@ interface QuestionDetails {
 }
 
 // Helper to get all questions from Prisma or Curriculum static data
-async function getAllQuestions(isMock: boolean): Promise<QuestionDetails[]> {
+async function getAllQuestions(isMock: boolean, subjectCode?: string): Promise<QuestionDetails[]> {
   const list: QuestionDetails[] = [];
   if (!isMock) {
     try {
       const dbUnits = await prisma.unit.findMany({
+        where: subjectCode ? { subject: { code: subjectCode } } : undefined,
         include: {
           lessons: {
             include: {
@@ -423,23 +446,29 @@ async function getAllQuestions(isMock: boolean): Promise<QuestionDetails[]> {
   }
 
   // Fallback to curriculum
-  for (const unit of mathGrade1Curriculum.units) {
-    for (const lesson of unit.lessons) {
-      for (const q of lesson.questions) {
-        const qId = q.id || q.prompt;
-        list.push({
-          id: qId,
-          type: q.type,
-          prompt: q.prompt,
-          answers: q.answers,
-          options: q.options,
-          explanation: q.explanation,
-          hints: q.hints,
-          lessonId: lesson.name, // Fake lessonId
-          lessonName: lesson.name,
-          unitId: unit.name, // Fake unitId
-          unitName: unit.name
-        });
+  const targetCurriculums = subjectCode 
+    ? allCurriculums.filter(c => c.code === subjectCode)
+    : allCurriculums;
+
+  for (const curriculum of targetCurriculums) {
+    for (const unit of curriculum.units) {
+      for (const lesson of unit.lessons) {
+        for (const q of lesson.questions) {
+          const qId = q.id || q.prompt;
+          list.push({
+            id: qId,
+            type: q.type,
+            prompt: q.prompt,
+            answers: q.answers,
+            options: q.options,
+            explanation: q.explanation,
+            hints: q.hints,
+            lessonId: lesson.name, // Fake lessonId
+            lessonName: lesson.name,
+            unitId: unit.name, // Fake unitId
+            unitName: unit.name
+          });
+        }
       }
     }
   }
@@ -450,13 +479,25 @@ async function getAllQuestions(isMock: boolean): Promise<QuestionDetails[]> {
 router.get('/progress', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const isMock = req.isMock;
+    const isMock = !!req.isMock;
+    const subjectCode = req.query.subject as string | undefined;
 
     let attempts: any[] = [];
     if (!isMock) {
       try {
         attempts = await prisma.attempt.findMany({
-          where: { userId },
+          where: {
+            userId,
+            question: subjectCode ? {
+              lesson: {
+                unit: {
+                  subject: {
+                    code: subjectCode
+                  }
+                }
+              }
+            } : undefined
+          },
           orderBy: { createdAt: 'asc' }
         });
       } catch (e) {
@@ -465,6 +506,12 @@ router.get('/progress', authMiddleware, async (req: AuthenticatedRequest, res: R
       }
     } else {
       attempts = mockDb.getUserAttempts(userId);
+    }
+
+    if (subjectCode && (isMock || attempts.length > 0)) {
+      const allSubjectQuestions = await getAllQuestions(isMock, subjectCode);
+      const subjectQuestionIds = new Set(allSubjectQuestions.map(q => q.id));
+      attempts = attempts.filter(att => subjectQuestionIds.has(att.questionId));
     }
 
     // Group attempts by questionId to find the latest attempt for each question
@@ -478,6 +525,7 @@ router.get('/progress', authMiddleware, async (req: AuthenticatedRequest, res: R
     if (!isMock) {
       try {
         rawUnits = await prisma.unit.findMany({
+          where: subjectCode ? { subject: { code: subjectCode } } : undefined,
           include: {
             lessons: {
               include: {
@@ -494,26 +542,34 @@ router.get('/progress', authMiddleware, async (req: AuthenticatedRequest, res: R
 
     // Fallback units configuration
     if (rawUnits.length === 0) {
-      rawUnits = mathGrade1Curriculum.units.map(u => ({
-        id: u.name,
-        name: u.name,
-        order: u.order,
-        description: u.description,
-        lessons: u.lessons.map(l => ({
-          id: l.name,
-          name: l.name,
-          order: l.order,
-          questions: l.questions.map(q => ({
-            id: q.id || q.prompt,
-            type: q.type,
-            prompt: q.prompt,
-            answers: q.answers,
-            options: q.options,
-            explanation: q.explanation,
-            hints: q.hints
+      const targetCurriculums = subjectCode 
+        ? allCurriculums.filter(c => c.code === subjectCode)
+        : allCurriculums;
+
+      rawUnits = [];
+      for (const curriculum of targetCurriculums) {
+        const curriculumUnits = curriculum.units.map(u => ({
+          id: u.name,
+          name: u.name,
+          order: u.order,
+          description: u.description,
+          lessons: u.lessons.map(l => ({
+            id: l.name,
+            name: l.name,
+            order: l.order,
+            questions: l.questions.map(q => ({
+              id: q.id || q.prompt,
+              type: q.type,
+              prompt: q.prompt,
+              answers: q.answers,
+              options: q.options,
+              explanation: q.explanation,
+              hints: q.hints
+            }))
           }))
-        }))
-      }));
+        }));
+        rawUnits.push(...curriculumUnits);
+      }
     }
 
     // Calculate progress
@@ -611,12 +667,24 @@ router.get('/reviews', authMiddleware, async (req: AuthenticatedRequest, res: Re
   try {
     const userId = req.userId!;
     const isMock = !!req.isMock;
+    const subjectCode = req.query.subject as string | undefined;
 
     let attempts: any[] = [];
     if (!isMock) {
       try {
         attempts = await prisma.attempt.findMany({
-          where: { userId },
+          where: {
+            userId,
+            question: subjectCode ? {
+              lesson: {
+                unit: {
+                  subject: {
+                    code: subjectCode
+                  }
+                }
+              }
+            } : undefined
+          },
           orderBy: { createdAt: 'asc' }
         });
       } catch (e) {
@@ -625,6 +693,12 @@ router.get('/reviews', authMiddleware, async (req: AuthenticatedRequest, res: Re
       }
     } else {
       attempts = mockDb.getUserAttempts(userId);
+    }
+
+    if (subjectCode && (isMock || attempts.length > 0)) {
+      const allSubjectQuestions = await getAllQuestions(isMock, subjectCode);
+      const subjectQuestionIds = new Set(allSubjectQuestions.map(q => q.id));
+      attempts = attempts.filter(att => subjectQuestionIds.has(att.questionId));
     }
 
     // Group attempts by questionId to find the latest attempt for each question
@@ -653,7 +727,7 @@ router.get('/reviews', authMiddleware, async (req: AuthenticatedRequest, res: Re
     }
 
     // Retrieve full question details for candidates
-    const allQuestions = await getAllQuestions(isMock);
+    const allQuestions = await getAllQuestions(isMock, subjectCode);
     
     // Filter and map
     const candidates = allQuestions
