@@ -347,22 +347,28 @@ function ExerciseScreenContent() {
 
     const utterance = new SpeechSynthesisUtterance(cleanText);
     utterance.lang = "ja-JP"; // Speak in Japanese across all subjects (including English) as requested by the user
-    utterance.rate = 0.85; // Slightly slower for comprehension
+    utterance.rate = 0.92; // Optimized rate: warm, slow enough for comprehension, but natural rhythm
 
-    // Explicitly bind localized voices to prevent cross-language synthesizer rendering issues
+    // Explicitly bind localized voices, prioritizing modern high-quality neural voices
     const availableVoices = voices.length > 0 ? voices : (typeof window !== "undefined" && window.speechSynthesis ? window.speechSynthesis.getVoices() : []);
     if (availableVoices.length > 0) {
-      // Prefer exact ja-JP, then any ja voice
-      const jaVoice = availableVoices.find(v => {
+      const jaVoices = availableVoices.filter(v => {
         const langLower = v.lang.toLowerCase().replace("_", "-");
-        return langLower === "ja-jp";
-      }) || availableVoices.find(v => {
-        const langLower = v.lang.toLowerCase().replace("_", "-");
-        return langLower.startsWith("ja");
+        return langLower === "ja-jp" || langLower.startsWith("ja");
       });
-      if (jaVoice) {
-        utterance.voice = jaVoice;
-        utterance.lang = jaVoice.lang; // Align utterance lang precisely with voice lang
+
+      if (jaVoices.length > 0) {
+        // Prioritize: Siri neural voices (macOS/iOS) > Google voices (Chrome) > Premium/Enhanced voices > default fallback
+        const jaVoice = jaVoices.find(v => v.name.toLowerCase().includes("siri"))
+          || jaVoices.find(v => v.name.toLowerCase().includes("google"))
+          || jaVoices.find(v => v.name.toLowerCase().includes("enhanced"))
+          || jaVoices.find(v => v.name.toLowerCase().includes("premium"))
+          || jaVoices[0];
+
+        if (jaVoice) {
+          utterance.voice = jaVoice;
+          utterance.lang = jaVoice.lang; // Align utterance lang precisely with voice lang
+        }
       }
     }
 
