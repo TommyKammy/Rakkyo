@@ -221,6 +221,32 @@ function ExerciseScreenContent() {
 
   // Text-to-Speech (TTS) Voice Synthesis
   const [isPlayingTts, setIsPlayingTts] = useState<string | null>(null);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  // Load and cache SpeechSynthesis voices early to avoid asynchronous initialization bugs (especially on first button click)
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+
+    const updateVoices = () => {
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        setVoices(window.speechSynthesis.getVoices());
+      }
+    };
+
+    updateVoices();
+
+    if (window.speechSynthesis.onvoiceschanged !== undefined) {
+      window.speechSynthesis.onvoiceschanged = updateVoices;
+    }
+
+    return () => {
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        if (window.speechSynthesis.onvoiceschanged !== undefined) {
+          window.speechSynthesis.onvoiceschanged = null;
+        }
+      }
+    };
+  }, []);
 
   // Speech-to-Text (STT) Voice Inquiries
   const [isListening, setIsListening] = useState(false);
@@ -296,6 +322,36 @@ function ExerciseScreenContent() {
     const utterance = new SpeechSynthesisUtterance(cleanText);
     utterance.lang = subjectCode === "english" ? "en-US" : "ja-JP";
     utterance.rate = subjectCode === "english" ? 0.9 : 0.85; // Slightly slower for comprehension
+
+    // Explicitly bind localized voices to prevent cross-language synthesizer rendering issues (e.g. Japanese voice reading English words)
+    const availableVoices = voices.length > 0 ? voices : (typeof window !== "undefined" && window.speechSynthesis ? window.speechSynthesis.getVoices() : []);
+    if (availableVoices.length > 0) {
+      if (subjectCode === "english") {
+        // Prefer exact en-US, then any en voice
+        const enVoice = availableVoices.find(v => {
+          const langLower = v.lang.toLowerCase().replace("_", "-");
+          return langLower === "en-us";
+        }) || availableVoices.find(v => {
+          const langLower = v.lang.toLowerCase().replace("_", "-");
+          return langLower.startsWith("en");
+        });
+        if (enVoice) {
+          utterance.voice = enVoice;
+        }
+      } else {
+        // Prefer exact ja-JP, then any ja voice
+        const jaVoice = availableVoices.find(v => {
+          const langLower = v.lang.toLowerCase().replace("_", "-");
+          return langLower === "ja-jp";
+        }) || availableVoices.find(v => {
+          const langLower = v.lang.toLowerCase().replace("_", "-");
+          return langLower.startsWith("ja");
+        });
+        if (jaVoice) {
+          utterance.voice = jaVoice;
+        }
+      }
+    }
 
     utterance.onend = () => {
       setIsPlayingTts(null);
