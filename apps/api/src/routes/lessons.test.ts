@@ -151,6 +151,34 @@ describe('Lessons Router /api/lessons', () => {
       expect(res2.body.hintText).toBe(res1.body.hintText);
       expect(res2.body.fromCache).toBe(true);
     });
+
+    it('should generate custom friendly answers when userQuestion is supplied, and bypass the cache', async () => {
+      const res1 = await request(app)
+        .post('/api/lessons/hint')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          questionId: '$-5 + 3$ を計算しなさい。',
+          hintsUsed: 0,
+          userQuestion: 'マイナスの計算の仕方を教えて！'
+        });
+
+      expect(res1.status).toBe(200);
+      expect(res1.body).toHaveProperty('hintText');
+      expect(res1.body.hintText).toContain('マイナスの計算の仕方を教えて！');
+      expect(res1.body.fromCache).toBe(false);
+
+      const res2 = await request(app)
+        .post('/api/lessons/hint')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          questionId: '$-5 + 3$ を計算しなさい。',
+          hintsUsed: 0,
+          userQuestion: 'マイナスの計算の仕方を教えて！'
+        });
+
+      expect(res2.status).toBe(200);
+      expect(res2.body.fromCache).toBe(false);
+    });
   });
 
   describe('GET /api/lessons/progress', () => {

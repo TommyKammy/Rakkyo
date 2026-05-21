@@ -28,6 +28,9 @@ export class GeminiAiTutorProvider implements AiTutorProvider {
       
       const promptConfig = SubjectPromptRouter.getPromptConfig(context.subjectCode || 'math');
       const sanitizedPrompt = SafetyFilter.sanitizeInput(context.prompt);
+      const sanitizedUserQuestion = context.userQuestion
+        ? SafetyFilter.sanitizeInput(context.userQuestion)
+        : undefined;
 
       const systemInstruction = `
 ${promptConfig.systemInstruction}
@@ -35,7 +38,7 @@ ${promptConfig.systemInstruction}
 ${promptConfig.getHintInstruction(nextStage)}
 `;
 
-      const promptText = `
+      let promptText = `
 【問題】
 ${sanitizedPrompt}
 
@@ -47,10 +50,20 @@ ${context.answers.join(' または ')}
 
 【既に提示されたヒントの数】
 ${context.hintsUsed}
+`;
 
+      if (sanitizedUserQuestion) {
+        promptText += `
+【生徒からの追加質問】
+生徒が直接あなたに質問をしてきました。この質問に対して、直接の答えを教えずに、数学のAI家庭教師「ラッキョくん」の中学生向けフレンドリーな口調（「〜だよ」「〜かな？」）で優しく解説・ヒントを答えてください。
+質問: "${sanitizedUserQuestion}"
+`;
+      } else {
+        promptText += `
 【ステージ】
 ステージ ${nextStage} のヒントを生成してください。答えは絶対に含めないでください。
 `;
+      }
 
       // Call Google Gemini API (gemini-2.5-flash or gemini-2.0-flash is the standard rapid model)
       const response = await ai.models.generateContent({

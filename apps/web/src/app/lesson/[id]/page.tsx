@@ -3,6 +3,38 @@
 import { useEffect, useState, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { mathGrade1Curriculum } from "@rakkyo/curriculum";
+import { NumberLineDiagram, AlgebraScaleDiagram, CoordinatePlaneDiagram } from "../../../components/diagrams";
+
+// Helper to detect math diagram types based on curriculum contents
+function getMathDiagram(prompt: string, explanation: string = ""): React.ReactNode {
+  const text = (prompt + " " + explanation).toLowerCase();
+  
+  // 1. Coordinate plane (y=ax, 比例, 反比例, 座標)
+  if (text.includes("比例") || text.includes("座標") || text.includes("グラフ") || text.includes("y=") || text.includes("y =") || text.includes("比例定数")) {
+    const eqMatch = text.match(/y\s*=\s*[-]?\d*x/i) || text.match(/y\s*=\s*[-]?\d+\/x/i);
+    const equation = eqMatch ? eqMatch[0] : "y = 2x";
+    return <CoordinatePlaneDiagram equation={equation} />;
+  }
+  
+  // 2. Algebra Scale (方程式, 等式)
+  if (text.includes("=") && text.includes("x")) {
+    const parts = text.split("=");
+    if (parts.length === 2) {
+      const lhs = parts[0].replace(/.*?[は\：]/, "").trim();
+      const rhs = parts[1].replace(/[。を解きなさい].*/, "").trim();
+      return <AlgebraScaleDiagram leftExpr={lhs || "2x+3"} rightExpr={rhs || "11"} />;
+    }
+    return <AlgebraScaleDiagram leftExpr="2x + 3" rightExpr="11" />;
+  }
+  
+  // 3. Number Line (正負の数, 計算)
+  if (text.includes("計算") || text.includes("＋") || text.includes("ー") || text.includes("+") || text.includes("-") || text.includes("負")) {
+    const cleanExpr = prompt.replace(/.*?[は\：]/, "").replace(/[。を計算しなさい].*/, "").trim();
+    return <NumberLineDiagram expression={cleanExpr || "-5 + 3"} />;
+  }
+  
+  return null;
+}
 
 // Styled Math Text Renderer to parse LaTeX variables dynamically and cleanly
 function MathText({ text }: { text: string }) {
@@ -85,6 +117,151 @@ function ExerciseScreenContent() {
   const [showFinalAnswer, setShowFinalAnswer] = useState(false);
   const [aiHints, setAiHints] = useState<{ [key: number]: string }>({});
   const [isLoadingHint, setIsLoadingHint] = useState(false);
+
+  // Text-to-Speech (TTS) Voice Synthesis
+  const [isPlayingTts, setIsPlayingTts] = useState<string | null>(null);
+
+  // Speech-to-Text (STT) Voice Inquiries
+  const [isListening, setIsListening] = useState(false);
+  const [speechText, setSpeechText] = useState("");
+  const [chatHistory, setChatHistory] = useState<{ sender: "user" | "ai"; text: string }[]>([]);
+  const [isSubmittingSpeech, setIsSubmittingSpeech] = useState(false);
+  const [recognitionInstance, setRecognitionInstance] = useState<any>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const rec = new SpeechRecognition();
+        rec.continuous = false;
+        rec.interimResults = false;
+        rec.lang = "ja-JP";
+
+        rec.onstart = () => {
+          setIsListening(true);
+        };
+
+        rec.onresult = (event: any) => {
+          const resultText = event.results[0][0].transcript;
+          setSpeechText(resultText);
+        };
+
+        rec.onerror = (event: any) => {
+          console.error("Speech recognition error:", event.error);
+          setIsListening(false);
+        };
+
+        rec.onend = () => {
+          setIsListening(false);
+        };
+
+        setRecognitionInstance(rec);
+      }
+    }
+
+    return () => {
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  const speakText = (text: string, id: string) => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+
+    if (isPlayingTts === id) {
+      window.speechSynthesis.cancel();
+      setIsPlayingTts(null);
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+
+    // Clean text from LaTeX segments to make TTS flow nicely
+    const cleanText = text
+      .replace(/\$/g, "")
+      .replace(/\\times/g, "かける")
+      .replace(/\\div/g, "わる")
+      .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, "$2分の$1")
+      .replace(/x/g, "エックス")
+      .replace(/y/g, "ワイ")
+      .replace(/-/g, "マイナス");
+
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.lang = "ja-JP";
+    utterance.rate = 0.85; // Slightly slower, perfect for middle school students
+
+    utterance.onend = () => {
+      setIsPlayingTts(null);
+    };
+
+    utterance.onerror = () => {
+      setIsPlayingTts(null);
+    };
+
+    setIsPlayingTts(id);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const startListening = () => {
+    if (recognitionInstance) {
+      try {
+        setSpeechText("");
+        recognitionInstance.start();
+      } catch (e) {
+        console.error("Recognition start failed", e);
+      }
+    } else {
+      alert("お使いのブラウザは音声認識に対応していません。Google Chromeなどをお試しください。");
+    }
+  };
+
+  const stopListening = () => {
+    if (recognitionInstance) {
+      recognitionInstance.stop();
+    }
+  };
+
+  const submitVoiceQuestion = async () => {
+    if (!speechText.trim() || isSubmittingSpeech) return;
+
+    const token = localStorage.getItem("rakkyo_token");
+    if (!token || !questions[currentQIdx]) return;
+
+    setIsSubmittingSpeech(true);
+    const userMsg = speechText;
+    setSpeechText("");
+    
+    setChatHistory(prev => [...prev, { sender: "user", text: userMsg }]);
+
+    try {
+      const q = questions[currentQIdx];
+      const response = await fetch("http://localhost:4000/api/lessons/hint", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          questionId: q.id || q.prompt,
+          hintsUsed: showHintPanel ? hintStage : 0,
+          userQuestion: userMsg
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setChatHistory(prev => [...prev, { sender: "ai", text: data.hintText }]);
+      } else {
+        setChatHistory(prev => [...prev, { sender: "ai", text: "ごめんね、うまくお返事できなかったみたい。もう一度質問してみてね。" }]);
+      }
+    } catch (e) {
+      console.warn("⚠️ Voice question dispatch error", e);
+      setChatHistory(prev => [...prev, { sender: "ai", text: "ネットワークエラーが発生したよ。もう一度試してみてね。" }]);
+    } finally {
+      setIsSubmittingSpeech(false);
+    }
+  };
 
   const fetchHint = async (stageNum: 1 | 2 | 3) => {
     if (aiHints[stageNum]) return; // Already fetched
@@ -247,6 +424,15 @@ function ExerciseScreenContent() {
     setShowFinalAnswer(false);
     setAiHints({});
 
+    // Clear speech states
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    setIsPlayingTts(null);
+    setSpeechText("");
+    setChatHistory([]);
+    setIsListening(false);
+
     if (currentQIdx + 1 < questions.length) {
       setCurrentQIdx(currentQIdx + 1);
     } else {
@@ -308,8 +494,20 @@ function ExerciseScreenContent() {
             </div>
 
             {/* Question Text */}
-            <div className="pt-2 text-base sm:text-lg font-bold text-slate-700 tracking-wide leading-relaxed">
-              <MathText text={currentQuestion.prompt} />
+            <div className="pt-2 flex items-start justify-between gap-4">
+              <div className="text-base sm:text-lg font-bold text-slate-700 tracking-wide leading-relaxed flex-1">
+                <MathText text={currentQuestion.prompt} />
+              </div>
+              <button
+                onClick={() => speakText(currentQuestion.prompt, "prompt")}
+                className={`px-3 py-1.5 rounded-xl border text-xs font-extrabold flex items-center gap-1 cursor-pointer transition-all active:translate-y-[1px] flex-shrink-0 ${
+                  isPlayingTts === "prompt"
+                    ? "bg-pastel-pink border-pastel-pink-border text-pastel-pink-dark"
+                    : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"
+                }`}
+              >
+                {isPlayingTts === "prompt" ? "⏹️ とめる" : "🔊 よみあげる"}
+              </button>
             </div>
 
             {/* Answer Input Cards */}
@@ -491,9 +689,21 @@ function ExerciseScreenContent() {
                 {/* Stage 1 Block */}
                 {hintStage >= 1 && (
                   <div className="bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl space-y-1.5">
-                    <p className="text-3xs bg-pastel-blue text-pastel-blue-dark border border-pastel-blue-border font-extrabold rounded-full px-2 py-0.5 inline-block">
-                      ヒント①：問題のいいかえ
-                    </p>
+                    <div className="flex items-center justify-between">
+                      <p className="text-3xs bg-pastel-blue text-pastel-blue-dark border border-pastel-blue-border font-extrabold rounded-full px-2 py-0.5 inline-block">
+                        ヒント①：問題のいいかえ
+                      </p>
+                      {aiHints[1] || currentQuestion.hints[0] ? (
+                        <button
+                          onClick={() => speakText(aiHints[1] || currentQuestion.hints[0], "hint1")}
+                          className={`text-3xs font-extrabold hover:underline cursor-pointer flex items-center gap-0.5 ${
+                            isPlayingTts === "hint1" ? "text-pastel-pink-dark font-black animate-pulse" : "text-slate-400"
+                          }`}
+                        >
+                          {isPlayingTts === "hint1" ? "⏹️ とめる" : "🔊 きく"}
+                        </button>
+                      ) : null}
+                    </div>
                     {hintStage === 1 && isLoadingHint && !aiHints[1] ? (
                       <div className="flex items-center gap-2 text-xs text-slate-400 font-bold py-2">
                         <span className="animate-spin rounded-full h-4 w-4 border-2 border-pastel-blue-border border-t-pastel-blue-dark" />
@@ -510,18 +720,35 @@ function ExerciseScreenContent() {
                 {/* Stage 2 Block */}
                 {hintStage >= 2 && (
                   <div className="bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl space-y-1.5">
-                    <p className="text-3xs bg-pastel-green text-pastel-green-dark border border-pastel-green-border font-extrabold rounded-full px-2 py-0.5 inline-block">
-                      ヒント②：考え方の図解
-                    </p>
+                    <div className="flex items-center justify-between">
+                      <p className="text-3xs bg-pastel-green text-pastel-green-dark border border-pastel-green-border font-extrabold rounded-full px-2 py-0.5 inline-block">
+                        ヒント②：考え方の図解
+                      </p>
+                      {aiHints[2] || currentQuestion.hints[1] ? (
+                        <button
+                          onClick={() => speakText(aiHints[2] || currentQuestion.hints[1], "hint2")}
+                          className={`text-3xs font-extrabold hover:underline cursor-pointer flex items-center gap-0.5 ${
+                            isPlayingTts === "hint2" ? "text-pastel-pink-dark font-black animate-pulse" : "text-slate-400"
+                          }`}
+                        >
+                          {isPlayingTts === "hint2" ? "⏹️ とめる" : "🔊 きく"}
+                        </button>
+                      ) : null}
+                    </div>
                     {hintStage === 2 && isLoadingHint && !aiHints[2] ? (
                       <div className="flex items-center gap-2 text-xs text-slate-400 font-bold py-2">
                         <span className="animate-spin rounded-full h-4 w-4 border-2 border-pastel-green-border border-t-pastel-green-dark" />
                         <span>ラッキョくんが考え中... 🧅</span>
                       </div>
                     ) : (
-                      <p className="text-xs font-bold text-slate-600 leading-relaxed">
-                        {aiHints[2] || currentQuestion.hints[1]}
-                      </p>
+                      <div className="space-y-3">
+                        <p className="text-xs font-bold text-slate-600 leading-relaxed">
+                          {aiHints[2] || currentQuestion.hints[1]}
+                        </p>
+                        <div className="mt-2 animate-wiggle-once">
+                          {getMathDiagram(currentQuestion.prompt, currentQuestion.explanation)}
+                        </div>
+                      </div>
                     )}
                   </div>
                 )}
@@ -529,9 +756,21 @@ function ExerciseScreenContent() {
                 {/* Stage 3 Block */}
                 {hintStage >= 3 && (
                   <div className="bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl space-y-1.5">
-                    <p className="text-3xs bg-pastel-pink text-pastel-pink-dark border border-pastel-pink-border font-extrabold rounded-full px-2 py-0.5 inline-block">
-                      ヒント③：解き方のステップ
-                    </p>
+                    <div className="flex items-center justify-between">
+                      <p className="text-3xs bg-pastel-pink text-pastel-pink-dark border border-pastel-pink-border font-extrabold rounded-full px-2 py-0.5 inline-block">
+                        ヒント③：解き方のステップ
+                      </p>
+                      {aiHints[3] || currentQuestion.hints[2] ? (
+                        <button
+                          onClick={() => speakText(aiHints[3] || currentQuestion.hints[2], "hint3")}
+                          className={`text-3xs font-extrabold hover:underline cursor-pointer flex items-center gap-0.5 ${
+                            isPlayingTts === "hint3" ? "text-pastel-pink-dark font-black animate-pulse" : "text-slate-400"
+                          }`}
+                        >
+                          {isPlayingTts === "hint3" ? "⏹️ とめる" : "🔊 きく"}
+                        </button>
+                      ) : null}
+                    </div>
                     {hintStage === 3 && isLoadingHint && !aiHints[3] ? (
                       <div className="flex items-center gap-2 text-xs text-slate-400 font-bold py-2">
                         <span className="animate-spin rounded-full h-4 w-4 border-2 border-pastel-pink-border border-t-pastel-pink-dark" />
@@ -576,9 +815,19 @@ function ExerciseScreenContent() {
                 {/* Final Explanation Spoiler Reveal Block */}
                 {showFinalAnswer && (
                   <div className="bg-pastel-yellow border-2 border-pastel-yellow-border p-4 rounded-2xl space-y-2.5">
-                    <p className="text-3xs bg-amber-500 text-white font-extrabold rounded-full px-2.5 py-0.5 inline-block">
-                      ていねいな解説・解答
-                    </p>
+                    <div className="flex items-center justify-between">
+                      <p className="text-3xs bg-amber-500 text-white font-extrabold rounded-full px-2.5 py-0.5 inline-block">
+                        ていねいな解説・解答
+                      </p>
+                      <button
+                        onClick={() => speakText(currentQuestion.explanation, "explanation")}
+                        className={`text-3xs font-extrabold hover:underline cursor-pointer flex items-center gap-0.5 ${
+                          isPlayingTts === "explanation" ? "text-pastel-pink-dark font-black animate-pulse" : "text-amber-600"
+                        }`}
+                      >
+                        {isPlayingTts === "explanation" ? "⏹️ とめる" : "🔊 きく"}
+                      </button>
+                    </div>
                     <p className="text-xs font-bold text-slate-700 leading-relaxed">
                       <MathText text={currentQuestion.explanation} />
                     </p>
@@ -591,6 +840,80 @@ function ExerciseScreenContent() {
                   </div>
                 )}
 
+              </div>
+
+              {/* STT / Text Freeform Chat Area */}
+              <div className="border-t border-slate-100 pt-4 mt-4 space-y-3">
+                <h4 className="text-3xs font-extrabold text-slate-400 tracking-wider uppercase flex items-center gap-1">
+                  <span>🎙️</span> ラッキョくんとフリートーク
+                </h4>
+                
+                {/* Chat dialogues log */}
+                {chatHistory.length > 0 && (
+                  <div className="max-h-[160px] overflow-y-auto space-y-2 p-2 bg-slate-50 border border-slate-100 rounded-xl">
+                    {chatHistory.map((chat, idx) => (
+                      <div
+                        key={idx}
+                        className={`flex flex-col max-w-[85%] rounded-2xl p-2.5 text-2xs font-bold leading-relaxed ${
+                          chat.sender === "user"
+                            ? "bg-pastel-blue text-pastel-blue-dark ml-auto rounded-tr-none"
+                            : "bg-white border border-pastel-purple-border text-slate-700 mr-auto rounded-tl-none bubbly-shadow-sm"
+                        }`}
+                      >
+                        <p>{chat.text}</p>
+                        {chat.sender === "ai" && (
+                          <button
+                            onClick={() => speakText(chat.text, `chat-${idx}`)}
+                            className={`text-4xs font-extrabold mt-1 hover:underline text-left cursor-pointer inline-flex items-center gap-0.5 ${
+                              isPlayingTts === `chat-${idx}` ? "text-pastel-pink-dark" : "text-slate-400"
+                            }`}
+                          >
+                            {isPlayingTts === `chat-${idx}` ? "⏹️ とめる" : "🔊 きく"}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    {isSubmittingSpeech && (
+                      <div className="bg-white border border-slate-200 text-slate-400 rounded-2xl mr-auto rounded-tl-none p-2.5 text-2xs font-bold animate-pulse max-w-[85%]">
+                        ラッキョくんが回答を入力中... 🧅
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Voice recording input & send forms */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={isListening ? stopListening : startListening}
+                      className={`p-3 rounded-2xl border-2 flex items-center justify-center flex-shrink-0 transition-all cursor-pointer bubbly-shadow text-2xs font-extrabold ${
+                        isListening
+                          ? "bg-pastel-pink border-pastel-pink-border text-pastel-pink-dark animate-pulse scale-95"
+                          : "bg-pastel-purple border-pastel-purple-border text-pastel-purple-dark hover:scale-[1.02]"
+                      }`}
+                      title={isListening ? "録音をとめる" : "こえで質問する"}
+                    >
+                      {isListening ? "⏹️ とめる" : "🎙️ こえで質問"}
+                    </button>
+                    <input
+                      type="text"
+                      value={speechText}
+                      onChange={(e) => setSpeechText(e.target.value)}
+                      placeholder={isListening ? "お話し中..." : "こえで話すか、ここに入力してね"}
+                      className="flex-1 px-3 py-2.5 border-2 border-slate-100 bg-slate-50/50 rounded-2xl text-2xs font-bold focus:border-pastel-purple-border focus:outline-none transition-all"
+                    />
+                  </div>
+
+                  {speechText.trim() && (
+                    <button
+                      onClick={submitVoiceQuestion}
+                      disabled={isSubmittingSpeech}
+                      className="w-full py-2 bg-pastel-blue border-2 border-pastel-blue-border text-pastel-blue-dark font-extrabold rounded-2xl text-2xs cursor-pointer hover:bg-sky-100/50 transition-all text-center disabled:opacity-50 disabled:cursor-not-allowed bubbly-shadow"
+                    >
+                      質問を送信する 🚀
+                    </button>
+                  )}
+                </div>
               </div>
 
             </div>

@@ -279,6 +279,7 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
 const hintSchema = z.object({
   questionId: z.string(),
   hintsUsed: z.number().int().nonnegative(),
+  userQuestion: z.string().optional(),
 });
 
 const hintCache = new AiResponseCache(24 * 60 * 60 * 1000); // 24 hours TTL
@@ -289,14 +290,17 @@ router.post('/hint', authMiddleware, async (req: AuthenticatedRequest, res: Resp
     const userId = req.userId!;
     const nextStage = (Math.min(3, Math.max(1, parsed.hintsUsed + 1))) as 1 | 2 | 3;
 
-    const cached = hintCache.get(userId, parsed.questionId, nextStage);
-    if (cached) {
-      res.json({
-        hintText: cached.hintText,
-        stage: cached.stage,
-        fromCache: true
-      });
-      return;
+    // Bypass cache check if userQuestion is provided to ensure dynamic, real-time responses
+    if (!parsed.userQuestion) {
+      const cached = hintCache.get(userId, parsed.questionId, nextStage);
+      if (cached) {
+        res.json({
+          hintText: cached.hintText,
+          stage: cached.stage,
+          fromCache: true
+        });
+        return;
+      }
     }
 
     let foundQuestion = null;
@@ -340,10 +344,13 @@ router.post('/hint', authMiddleware, async (req: AuthenticatedRequest, res: Resp
       answers: foundQuestion.answers,
       hintsUsed: parsed.hintsUsed,
       staticHints: foundQuestion.hints,
-      subjectCode: 'math'
+      subjectCode: 'math',
+      userQuestion: parsed.userQuestion
     });
 
-    hintCache.set(userId, parsed.questionId, nextStage, result.hintText);
+    if (!parsed.userQuestion) {
+      hintCache.set(userId, parsed.questionId, nextStage, result.hintText);
+    }
 
     res.json({
       hintText: result.hintText,
