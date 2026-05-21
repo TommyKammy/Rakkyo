@@ -1,0 +1,102 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id             String      @id @default(uuid())
+  email          String      @unique
+  password       String
+  nickname       String
+  schoolYear     Int         @default(1) // Grade 1, 2, 3
+  currentXp      Int         @default(0)
+  level          Int         @default(1)
+  streakCount    Int         @default(0)
+  lastActiveDate DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  attempts       Attempt[]
+  badges         UserBadge[]
+}
+
+model Subject {
+  id        String   @id @default(uuid())
+  name      String
+  code      String   @unique // e.g. "math", "english"
+  isEnabled Boolean  @default(true)
+  units     Unit[]
+}
+
+model Unit {
+  id          String   @id @default(uuid())
+  subjectId   String
+  subject     Subject  @relation(fields: [subjectId], references: [id])
+  name        String
+  order       Int
+  description String
+  isLocked    Boolean  @default(false)
+  lessons     Lesson[]
+}
+
+model Lesson {
+  id        String     @id @default(uuid())
+  unitId    String
+  unit      Unit       @relation(fields: [unitId], references: [id])
+  name      String
+  order     Int
+  questions Question[]
+}
+
+enum QuestionType {
+  MULTIPLE_CHOICE
+  NUMBER_INPUT
+  FILL_IN_BLANK
+}
+
+model Question {
+  id          String       @id @default(uuid())
+  lessonId    String
+  lesson      Lesson       @relation(fields: [lessonId], references: [id])
+  type        QuestionType
+  prompt      String
+  answers     String[]     // Accepted correct answers
+  options     String[]     // For multiple choice
+  explanation String
+  hints       String[]     // Fallback static hints
+  attempts    Attempt[]
+}
+
+model Attempt {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  questionId      String
+  question        Question @relation(fields: [questionId], references: [id])
+  isCorrect       Boolean
+  hintsUsed       Int      @default(0)
+  answerSubmitted String
+  createdAt       DateTime @default(now())
+}
+
+model Badge {
+  id            String      @id @default(uuid())
+  name          String
+  iconUrl       String
+  conditionType String      // e.g. "STREAK", "XP", "CORRECT_ANSWERS"
+  threshold     Int
+  users         UserBadge[]
+}
+
+model UserBadge {
+  userId   String
+  user     User     @relation(fields: [userId], references: [id])
+  badgeId  String
+  badge    Badge    @relation(fields: [badgeId], references: [id])
+  earnedAt DateTime @default(now())
+
+  @@id([userId, badgeId])
+}
