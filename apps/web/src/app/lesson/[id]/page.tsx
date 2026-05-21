@@ -227,9 +227,20 @@ function ExerciseScreenContent() {
   useEffect(() => {
     if (typeof window === "undefined" || !window.speechSynthesis) return;
 
+    let attempts = 0;
+    const maxAttempts = 10;
+    let timerId: any = null;
+
     const updateVoices = () => {
       if (typeof window !== "undefined" && window.speechSynthesis) {
-        setVoices(window.speechSynthesis.getVoices());
+        const voiceList = window.speechSynthesis.getVoices();
+        if (voiceList && voiceList.length > 0) {
+          setVoices(voiceList);
+          if (timerId) {
+            clearInterval(timerId);
+            timerId = null;
+          }
+        }
       }
     };
 
@@ -239,7 +250,22 @@ function ExerciseScreenContent() {
       window.speechSynthesis.onvoiceschanged = updateVoices;
     }
 
+    // Polling fallback to ensure robust catalog population in all browsers (e.g. Safari, mobile webviews)
+    timerId = setInterval(() => {
+      attempts++;
+      updateVoices();
+      if (attempts >= maxAttempts) {
+        if (timerId) {
+          clearInterval(timerId);
+          timerId = null;
+        }
+      }
+    }, 250);
+
     return () => {
+      if (timerId) {
+        clearInterval(timerId);
+      }
       if (typeof window !== "undefined" && window.speechSynthesis) {
         if (window.speechSynthesis.onvoiceschanged !== undefined) {
           window.speechSynthesis.onvoiceschanged = null;
@@ -337,6 +363,7 @@ function ExerciseScreenContent() {
         });
         if (enVoice) {
           utterance.voice = enVoice;
+          utterance.lang = enVoice.lang; // Align utterance lang precisely with voice lang to prevent browser-level fallback overrides
         }
       } else {
         // Prefer exact ja-JP, then any ja voice
@@ -349,6 +376,7 @@ function ExerciseScreenContent() {
         });
         if (jaVoice) {
           utterance.voice = jaVoice;
+          utterance.lang = jaVoice.lang; // Align utterance lang precisely with voice lang to prevent browser-level fallback overrides
         }
       }
     }
