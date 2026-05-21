@@ -1,4 +1,6 @@
 import { AiTutorProvider, HintContext, HintResult, MockAiTutorProvider } from '../adapter';
+import { SubjectPromptRouter } from '../router';
+import { SafetyFilter } from '../safety';
 
 export class GeminiAiTutorProvider implements AiTutorProvider {
   private apiKey: string | undefined;
@@ -24,29 +26,18 @@ export class GeminiAiTutorProvider implements AiTutorProvider {
       
       const ai = new GoogleGenAI({ apiKey: this.apiKey });
       
+      const promptConfig = SubjectPromptRouter.getPromptConfig(context.subjectCode || 'math');
+      const sanitizedPrompt = SafetyFilter.sanitizeInput(context.prompt);
+
       const systemInstruction = `
-あなたは中学1年生向けの優しくフレンドリーな数学のAI家庭教師「ラッキョくん」です。
-ユーザー（中学1年生）が数学の問題を解くのを助けるために、適切なヒントを提供します。
+${promptConfig.systemInstruction}
 
-【超重要制約ルール】
-1. 絶対に正解（数値や最終的な答え）を直接教えてはいけません！
-2. 絶対に最終的な計算式（例: -5 + 3 = -2 など）そのものを教えないでください！
-3. 優しく、ひらがなを交えながら、やる気を引き出すように励ましてください。語尾は「〜だよ」「〜かな？」などを使い、親しみやすいキャラクターとして振る舞ってください。
-
-【ヒントの3つの段階】
-今回生成すべきヒントは「ステージ ${nextStage}」です。以下のルールに従って1つだけのヒントを生成してください：
-
-- ステージ 1（hintsUsed = 0 のとき）: 問題のいいかえ
-  - 答えや計算式には一切触れず、問題に出てくる数学用語の意味や、「何を聞かれているのか」を優しく噛み砕いて整理してあげてください。
-- ステージ 2（hintsUsed = 1 のとき）: 考え方の図解・比喩
-  - 概念を理解するための視覚的なイメージ（数直線、天秤、プラスとマイナスの玉の打ち消し合いなど）を使って説明してください。具体的な計算式は示さないでください。
-- ステージ 3（hintsUsed = 2 のとき）: 解き方のステップ
-  - 答えを導くための手順（ステップ1、ステップ2）を説明してください。「まず符号を決めよう」「次に絶対値を計算しよう」のように誘導し、最後の計算自体はユーザー自身に行わせてください。
+${promptConfig.getHintInstruction(nextStage)}
 `;
 
       const promptText = `
 【問題】
-${context.prompt}
+${sanitizedPrompt}
 
 【この問題の解説（参考情報）】
 ${context.explanation}
@@ -74,17 +65,13 @@ ${context.hintsUsed}
       const hintText = response.text || '';
       
       // Sanitization: Double check to prevent answer leak in generated text
-      let sanitizedText = hintText;
-      for (const answer of context.answers) {
-        // If the LLM accidentally leaked the exact raw answer, strip it or fallback
-        if (hintText.includes(`答えは ${answer}`) || hintText.includes(`＝ ${answer}`) || hintText.includes(`= ${answer}`)) {
-          console.warn('⚠️ Leaked answer detected in Gemini response. Triggering mock fallback.');
-          return this.mockFallback.generateHint(context);
-        }
+      if (SafetyFilter.isAnswerLeaked(hintText, context.answers)) {
+        console.warn('⚠️ Leaked answer detected in Gemini response. Triggering mock fallback.');
+        return this.mockFallback.generateHint(context);
       }
 
       return {
-        hintText: sanitizedText,
+        hintText: hintText,
         stage: nextStage,
         isMock: false
       };

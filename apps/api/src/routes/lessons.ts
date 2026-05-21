@@ -4,7 +4,7 @@ import prisma from '../db';
 import { mockDb } from '../mockDb';
 import { authMiddleware, AuthenticatedRequest } from '../middlewares/auth';
 import { mathGrade1Curriculum } from '@rakkyo/curriculum';
-import { GeminiAiTutorProvider } from '@rakkyo/ai-tutor';
+import { AiTutorProviderFactory, AiResponseCache, SafetyFilter } from '@rakkyo/ai-tutor';
 
 const router = Router();
 
@@ -281,22 +281,19 @@ const hintSchema = z.object({
   hintsUsed: z.number().int().nonnegative(),
 });
 
-const hintCache = new Map<string, { hintText: string; generatedAt: number }>();
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-const aiTutorProvider = new GeminiAiTutorProvider();
+const hintCache = new AiResponseCache(24 * 60 * 60 * 1000); // 24 hours TTL
 
 router.post('/hint', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const parsed = hintSchema.parse(req.body);
     const userId = req.userId!;
+    const nextStage = (Math.min(3, Math.max(1, parsed.hintsUsed + 1))) as 1 | 2 | 3;
 
-    const cacheKey = `${userId}_${parsed.questionId}_${parsed.hintsUsed}`;
-    const cached = hintCache.get(cacheKey);
-    if (cached && (Date.now() - cached.generatedAt) < CACHE_TTL_MS) {
+    const cached = hintCache.get(userId, parsed.questionId, nextStage);
+    if (cached) {
       res.json({
         hintText: cached.hintText,
-        stage: Math.min(3, parsed.hintsUsed + 1),
+        stage: cached.stage,
         fromCache: true
       });
       return;
@@ -333,18 +330,20 @@ router.post('/hint', authMiddleware, async (req: AuthenticatedRequest, res: Resp
       return;
     }
 
-    const result = await aiTutorProvider.generateHint({
-      prompt: foundQuestion.prompt,
+    // Input PII sanitization at API level
+    const sanitizedPrompt = SafetyFilter.sanitizeInput(foundQuestion.prompt);
+
+    const provider = AiTutorProviderFactory.getProvider();
+    const result = await provider.generateHint({
+      prompt: sanitizedPrompt,
       explanation: foundQuestion.explanation,
       answers: foundQuestion.answers,
       hintsUsed: parsed.hintsUsed,
-      staticHints: foundQuestion.hints
+      staticHints: foundQuestion.hints,
+      subjectCode: 'math'
     });
 
-    hintCache.set(cacheKey, {
-      hintText: result.hintText,
-      generatedAt: Date.now()
-    });
+    hintCache.set(userId, parsed.questionId, nextStage, result.hintText);
 
     res.json({
       hintText: result.hintText,
@@ -684,6 +683,20 @@ router.get('/reviews', authMiddleware, async (req: AuthenticatedRequest, res: Re
     res.json({ questions: selectedReviews });
   } catch (error) {
     console.error('Review scheduler error:', error);
+    res.status(500).json({ error: 'サーバーエラーが発生しました。' });
+  }
+});
+
+// Administrative endpoint to clear AI tutor hints cache
+router.post('/hint/cache/clear', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    hintCache.clear();
+    res.json({
+      message: 'AIチューターのヒントキャッシュをすべてクリアしました。',
+      success: true
+    });
+  } catch (error) {
+    console.error('Lessons cache clear error:', error);
     res.status(500).json({ error: 'サーバーエラーが発生しました。' });
   }
 });

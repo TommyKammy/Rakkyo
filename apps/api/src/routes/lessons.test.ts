@@ -221,4 +221,55 @@ describe('Lessons Router /api/lessons', () => {
       expect(targetReview.lastAttempt.isCorrect).toBe(false);
     });
   });
+
+  describe('POST /api/lessons/hint/cache/clear', () => {
+    it('should clear the hint cache successfully', async () => {
+      // 1. Clear cache first to ensure a clean slate
+      const initialClear = await request(app)
+        .post('/api/lessons/hint/cache/clear')
+        .set('Authorization', `Bearer ${token}`);
+      expect(initialClear.status).toBe(200);
+
+      // 2. Populate cache by making a hint request (Stage 1)
+      const res1 = await request(app)
+        .post('/api/lessons/hint')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          questionId: '$-5 + 3$ を計算しなさい。',
+          hintsUsed: 0
+        });
+      expect(res1.status).toBe(200);
+      expect(res1.body.fromCache).toBe(false);
+
+      // 3. Fetch again to ensure it comes from cache
+      const res2 = await request(app)
+        .post('/api/lessons/hint')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          questionId: '$-5 + 3$ を計算しなさい。',
+          hintsUsed: 0
+        });
+      expect(res2.status).toBe(200);
+      expect(res2.body.fromCache).toBe(true);
+
+      // 4. Clear cache via endpoint
+      const clearRes = await request(app)
+        .post('/api/lessons/hint/cache/clear')
+        .set('Authorization', `Bearer ${token}`);
+      expect(clearRes.status).toBe(200);
+      expect(clearRes.body.success).toBe(true);
+
+      // 5. Fetch again and verify fromCache is false (regenerated/missed cache)
+      const res3 = await request(app)
+        .post('/api/lessons/hint')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          questionId: '$-5 + 3$ を計算しなさい。',
+          hintsUsed: 0
+        });
+      expect(res3.status).toBe(200);
+      expect(res3.body.fromCache).toBe(false);
+    });
+  });
 });
+

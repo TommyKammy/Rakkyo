@@ -4,6 +4,7 @@ export interface HintContext {
   answers: string[];
   hintsUsed: number; // 0, 1, 2 (the next hint to fetch will be hintsUsed + 1)
   staticHints?: string[]; // curriculum fallback hints
+  subjectCode?: string;
 }
 
 export interface HintResult {
