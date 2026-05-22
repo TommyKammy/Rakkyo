@@ -5,6 +5,7 @@ import authRouter from './routes/auth';
 import lessonsRouter from './routes/lessons';
 import parentRouter from './routes/parent';
 import teacherRouter from './routes/teacher';
+import collaborativeRouter from './routes/collaborative';
 
 const app = express();
 
@@ -15,6 +16,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/lessons', lessonsRouter);
 app.use('/api/parent', parentRouter);
 app.use('/api/teacher', teacherRouter);
+app.use('/api/collaborative', collaborativeRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({

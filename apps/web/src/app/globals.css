@@ -79,3 +79,25 @@ body {
 .bubbly-shadow-lg {
   box-shadow: 0 8px 0 0 rgba(0, 0, 0, 0.08);
 }
+
+/* 液体波形アニメーション */
+@keyframes wave-animation-slow {
+  0% { transform: translateX(0) scaleY(1); }
+  50% { transform: translateX(-25%) scaleY(0.8); }
+  100% { transform: translateX(-50%) scaleY(1); }
+}
+
+@keyframes wave-animation-fast {
+  0% { transform: translateX(0) scaleY(0.9); }
+  50% { transform: translateX(-35%) scaleY(1.1); }
+  100% { transform: translateX(-70%) scaleY(0.9); }
+}
+
+.liquid-wave-slow {
+  animation: wave-animation-slow 6s linear infinite;
+}
+
+.liquid-wave-fast {
+  animation: wave-animation-fast 4s linear infinite;
+}
+

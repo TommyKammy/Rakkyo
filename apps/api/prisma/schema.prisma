@@ -64,6 +64,12 @@ model User {
   parentRelations  ParentChildRelation[]       @relation("ChildToParent")
   childRelations   ParentChildRelation[]       @relation("ParentToChild")
 
+  // Phase-12
+  sentStamps          PeerStamp[]              @relation("SentStamps")
+  receivedStamps      PeerStamp[]              @relation("ReceivedStamps")
+  hiramekiTips        HiramekiTip[]
+  childCelebrations   ParentalCelebration[]    @relation("ChildCelebrations")
+
   @@unique([tenantId, email])
   @@index([tenantId])
 }
@@ -76,6 +82,10 @@ model Class {
   grade       Int               // Grade year
   enrollments ClassEnrollment[]
   assignments Assignment[]
+
+  // Phase-12
+  hiramekiTips  HiramekiTip[]
+  classMissions ClassMission[]
 
   @@index([tenantId])
 }
@@ -195,6 +205,9 @@ model Attempt {
   createdAt       DateTime @default(now())
   errorType       String?
   aiDiagnosis     String?
+
+  // Phase-12
+  parentalCelebrations ParentalCelebration[]
 }
 
 model Badge {
@@ -223,4 +236,60 @@ model ParentMessage {
   message   String
   isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
+}
+
+model PeerStamp {
+  id         String   @id @default(uuid())
+  senderId   String
+  sender     User     @relation("SentStamps", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  receiver   User     @relation("ReceivedStamps", fields: [receiverId], references: [id], onDelete: Cascade)
+  stampType  String   // e.g. "DONT_GIVE_UP", "NICE_GRIT", "SHINING"
+  createdAt  DateTime @default(now())
+
+  @@index([senderId])
+  @@index([receiverId])
+}
+
+model HiramekiTip {
+  id        String   @id @default(uuid())
+  classId   String
+  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nickname  String   // "がんばるオニオン" などの自動割当される匿名ニックネーム
+  content   String
+  isSafe    Boolean  @default(true) // AI Safety Filter 検知結果
+  createdAt DateTime @default(now())
+
+  @@index([classId])
+  @@index([userId])
+}
+
+model ClassMission {
+  id             String   @id @default(uuid())
+  classId        String
+  class          Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  title          String   // ミッションのタイトル（例：「今週のあきらめない勉強時間」）
+  targetMinutes  Int      // 目標時間（分）
+  currentMinutes Int      @default(0) // 現在の累計時間（分）
+  dueDate        DateTime
+  createdAt      DateTime @default(now())
+
+  @@index([classId])
+}
+
+model ParentalCelebration {
+  id            String   @id @default(uuid())
+  childId       String
+  child         User     @relation("ChildCelebrations", fields: [childId], references: [id], onDelete: Cascade)
+  attemptId     String
+  attempt       Attempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  token         String   @unique // 保護者用リンクのトークン
+  parentStamp   String?  // 保護者からのスタンプ ("GREAT_JOB", "PROUD_OF_YOU", "KEEP_IT_UP" など)
+  parentComment String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([childId])
 }

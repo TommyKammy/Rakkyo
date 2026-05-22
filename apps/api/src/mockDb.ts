@@ -78,6 +78,45 @@ export interface ParentMessageMock {
   createdAt: string;
 }
 
+export interface PeerStampMock {
+  id: string;
+  senderId: string;
+  receiverId: string;
+  stampType: string;
+  createdAt: string;
+}
+
+export interface HiramekiTipMock {
+  id: string;
+  classId: string;
+  userId: string;
+  nickname: string;
+  content: string;
+  isSafe: boolean;
+  createdAt: string;
+}
+
+export interface ClassMissionMock {
+  id: string;
+  classId: string;
+  title: string;
+  targetMinutes: number;
+  currentMinutes: number;
+  dueDate: string;
+  createdAt: string;
+}
+
+export interface ParentalCelebrationMock {
+  id: string;
+  childId: string;
+  attemptId: string;
+  token: string;
+  parentStamp: string | null;
+  parentComment: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 class MockDatabase {
   tenants: TenantMock[] = [];
   users: UserMock[] = [];
@@ -88,6 +127,12 @@ class MockDatabase {
   attempts: AttemptMock[] = [];
   parentMessages: ParentMessageMock[] = [];
   dynamicQuestions: any[] = [];
+  
+  // Phase 12 arrays
+  peerStamps: PeerStampMock[] = [];
+  hiramekiTips: HiramekiTipMock[] = [];
+  classMissions: ClassMissionMock[] = [];
+  parentalCelebrations: ParentalCelebrationMock[] = [];
 
   constructor() {
     // Seed default B2C tenant
@@ -293,6 +338,66 @@ class MockDatabase {
         createdAt: getPastDate(0, 15 + 10)
       }
     );
+
+    // Seed Phase 12 Class Mission
+    this.classMissions.push({
+      id: 'mission_seed_1',
+      classId: 'test-class-id',
+      title: 'クラスみんなで協力！あきらめない勉強時間 🧅',
+      targetMinutes: 1000,
+      currentMinutes: 480,
+      dueDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(), // 5 days left
+      createdAt: new Date().toISOString()
+    });
+
+    // Seed Phase 12 Hirameki Tips (Anonymous tips board)
+    this.hiramekiTips.push({
+      id: 'tip_seed_1',
+      classId: 'test-class-id',
+      userId: 'user_dummy_student1',
+      nickname: 'ひらめきラッキョ',
+      content: '$-5 + 3$ は、数直線の「-5」の位置から右に3つジャンプするってイメージすると簡単だよ！🧅',
+      isSafe: true,
+      createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() // 1 day ago
+    }, {
+      id: 'tip_seed_2',
+      classId: 'test-class-id',
+      userId: 'user_dummy_student2',
+      nickname: 'がんばるオニオン',
+      content: '文字式にマイナスの数を代入するときは、文字をカッコ $( )$ のハコに置き換えて、その中にそっと数字を入れるって意識すると符号ミスがなくなるよ！💪',
+      isSafe: true,
+      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() // 2 hours ago
+    });
+
+    // Seed dummy users for presence simulation
+    const dummyNames = ['ウキウキらっきょ', 'のんびりオニオン', 'シャキシャキネギ', 'もぐもぐニンニク'];
+    dummyNames.forEach((nickname, idx) => {
+      this.users.push({
+        id: `user_presence_${idx}`,
+        tenantId: 'test-tenant-id',
+        email: `presence_${idx}@rakkyo.com`,
+        passwordHash: 'dummy',
+        nickname,
+        role: 'STUDENT',
+        schoolYear: 1,
+        currentXp: 100 + idx * 50,
+        level: 2,
+        streakCount: 2 + idx,
+        lastActiveDate: new Date(Date.now() - idx * 5 * 60 * 1000).toISOString(),
+        parentalConsent: true,
+        aiHintCountToday: 0,
+        lastAiHintDate: null,
+        badges: [],
+        createdAt: new Date().toISOString()
+      });
+      // Enroll dummy students into test class
+      this.classEnrollments.push({
+        id: `enroll_presence_${idx}`,
+        classId: 'test-class-id',
+        userId: `user_presence_${idx}`,
+        role: 'STUDENT'
+      });
+    });
   }
 
   // Tenant helpers
@@ -506,6 +611,102 @@ class MockDatabase {
 
   findDynamicQuestion(id: string): any {
     return this.dynamicQuestions.find(q => q.id === id);
+  }
+
+  // PeerStamp Mock helpers
+  createPeerStamp(senderId: string, receiverId: string, stampType: string): PeerStampMock {
+    const newStamp: PeerStampMock = {
+      id: 'stamp_' + Math.random().toString(36).substr(2, 9),
+      senderId,
+      receiverId,
+      stampType,
+      createdAt: new Date().toISOString()
+    };
+    this.peerStamps.push(newStamp);
+    return newStamp;
+  }
+
+  getUserReceivedStamps(userId: string): (PeerStampMock & { senderNickname: string })[] {
+    return this.peerStamps
+      .filter(s => s.receiverId === userId)
+      .map(s => {
+        const sender = this.findUserById(s.senderId);
+        return {
+          ...s,
+          senderNickname: sender ? sender.nickname : 'なぞのラッキョ'
+        };
+      });
+  }
+
+  // HiramekiTip Mock helpers
+  createHiramekiTip(classId: string, userId: string, nickname: string, content: string, isSafe: boolean): HiramekiTipMock {
+    const newTip: HiramekiTipMock = {
+      id: 'tip_' + Math.random().toString(36).substr(2, 9),
+      classId,
+      userId,
+      nickname,
+      content,
+      isSafe,
+      createdAt: new Date().toISOString()
+    };
+    this.hiramekiTips.push(newTip);
+    return newTip;
+  }
+
+  getClassHiramekiTips(classId: string): HiramekiTipMock[] {
+    return this.hiramekiTips
+      .filter(t => t.classId === classId && t.isSafe)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  // ClassMission Mock helpers
+  getClassMissions(classId: string): ClassMissionMock[] {
+    return this.classMissions.filter(m => m.classId === classId);
+  }
+
+  contributeToClassMission(classId: string, minutes: number): boolean {
+    const missions = this.classMissions.filter(m => m.classId === classId);
+    if (missions.length > 0) {
+      missions.forEach(m => {
+        m.currentMinutes += minutes;
+      });
+      return true;
+    }
+    return false;
+  }
+
+  // ParentalCelebration Mock helpers
+  createParentalCelebration(childId: string, attemptId: string, token: string): ParentalCelebrationMock {
+    const celebration: ParentalCelebrationMock = {
+      id: 'celeb_' + Math.random().toString(36).substr(2, 9),
+      childId,
+      attemptId,
+      token,
+      parentStamp: null,
+      parentComment: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    this.parentalCelebrations.push(celebration);
+    return celebration;
+  }
+
+  findParentalCelebrationByToken(token: string): ParentalCelebrationMock | undefined {
+    return this.parentalCelebrations.find(c => c.token === token);
+  }
+
+  respondToParentalCelebration(token: string, stamp: string, comment?: string): boolean {
+    const celeb = this.findParentalCelebrationByToken(token);
+    if (celeb) {
+      celeb.parentStamp = stamp;
+      celeb.parentComment = comment || null;
+      celeb.updatedAt = new Date().toISOString();
+
+      // Also create a direct ParentMessage so the kid sees it as a notification!
+      this.createParentMessage(celeb.childId, `保護者からスタンプ「${stamp}」とメッセージ「${comment || 'がんばったね！'}」が届きました！`);
+      return true;
+    }
+    return false;
   }
 }
 

@@ -41,6 +41,7 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
 
     let isCorrect = false;
     let foundQuestion = null;
+    let attemptId: string | null = null;
 
     // 1. Verify Answer correctness
     if (!isMock) {
@@ -227,7 +228,7 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
       updatedBadgesList = [...currentBadges];
 
       // Insert current attempt in mock DB so badge logic can count it
-      mockDb.createAttempt({
+      const createdAttempt = mockDb.createAttempt({
         userId,
         questionId: parsed.questionId,
         isCorrect,
@@ -237,6 +238,7 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
         errorType,
         aiDiagnosis
       });
+      attemptId = createdAttempt.id;
 
       const allMockAttempts = mockDb.getUserAttempts(userId);
 
@@ -315,10 +317,10 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
         badges: updatedBadgesList
       });
     } else {
-      // Prisma DB Badge check
       try {
+        // Prisma DB Badge check
         // Create attempt record
-        await prisma.attempt.create({
+        const createdAttempt = await prisma.attempt.create({
           data: {
             userId,
             questionId: parsed.questionId,
@@ -330,6 +332,7 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
             aiDiagnosis
           }
         });
+        attemptId = createdAttempt.id;
 
         // Update User stats
         const updatedUser = await prisma.user.update({
@@ -453,9 +456,8 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
         updatedBadgesList = finalUserBadges.map(ub => `${ub.badge.iconUrl} ${ub.badge.name}`);
 
       } catch (dbError) {
-        console.error('❌ Error updating DB stats. Falling back to in-memory Mock DB values for response.', dbError);
         // Fallback response updates as mock so client doesn't break
-        mockDb.createAttempt({
+        const mockAttempt = mockDb.createAttempt({
           userId,
           questionId: parsed.questionId,
           isCorrect,
@@ -463,11 +465,13 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
           answerSubmitted: parsed.answerSubmitted,
           durationSeconds: parsed.durationSeconds,
         });
+        attemptId = mockAttempt.id;
         updatedBadgesList = user.badges || [];
       }
     }
 
     res.json({
+      attemptId,
       isCorrect,
       xpAwarded,
       isGritBonus,

@@ -237,6 +237,13 @@ function ExerciseScreenContent() {
   const [showLevelUpModal, setShowLevelUpModal] = useState(false);
   const [levelUpTo, setLevelUpTo] = useState(0);
 
+  // Phase 12 states
+  const [latestAttemptId, setLatestAttemptId] = useState<string | null>(null);
+  const [totalSeconds, setTotalSeconds] = useState(0);
+  const [showCelebrationShareModal, setShowCelebrationShareModal] = useState(false);
+  const [shareLink, setShareLink] = useState("");
+  const [isGeneratingShareLink, setIsGeneratingShareLink] = useState(false);
+
   // Timer state
   const [startTime, setStartTime] = useState<number>(Date.now());
 
@@ -578,6 +585,7 @@ function ExerciseScreenContent() {
     const token = localStorage.getItem("rakkyo_token");
     const hintsUsed = showHintPanel ? hintStage : 0;
     const durationSeconds = Math.max(1, Math.round((Date.now() - startTime) / 1000));
+    setTotalSeconds(prev => prev + durationSeconds);
 
     // Check locally first for instant evaluation/fallback
     const isAnsCorrect = currentQuestion.answers.some(
@@ -607,6 +615,9 @@ function ExerciseScreenContent() {
         if (response.ok) {
           const data = await response.json();
           setIsCorrect(data.isCorrect);
+          if (data.attemptId) {
+            setLatestAttemptId(data.attemptId);
+          }
 
           if (data.isCorrect) {
             setMascotEmotion('correct');
@@ -656,6 +667,8 @@ function ExerciseScreenContent() {
     }
 
     // Local fallback evaluation (offline mode)
+    const fallbackAttemptId = "attempt_fallback_" + Date.now();
+    setLatestAttemptId(fallbackAttemptId);
     if (isAnsCorrect) {
       setMascotEmotion('correct');
       speak("正解！すごすぎるよ！ラッキョくんも大喜びだよ！", "correct");
@@ -735,6 +748,64 @@ function ExerciseScreenContent() {
     }
   };
 
+  const contributeToClassMission = async () => {
+    const token = localStorage.getItem("rakkyo_token");
+    if (!token) return;
+
+    // Convert seconds to minutes (minimum 1 minute)
+    const minutes = Math.max(1, Math.round(totalSeconds / 60));
+
+    try {
+      await fetch("http://localhost:4000/api/collaborative/missions/contribute", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ minutes })
+      });
+      console.log(`Successfully contributed ${minutes} minutes to class mission!`);
+    } catch (e) {
+      console.warn("⚠️ Failed to contribute study time to class mission dynamically.", e);
+    }
+  };
+
+  const handleGenerateParentCelebrationLink = async () => {
+    const token = localStorage.getItem("rakkyo_token");
+    if (!token || !latestAttemptId) return;
+
+    setIsGeneratingShareLink(true);
+    try {
+      const response = await fetch("http://localhost:4000/api/collaborative/celebration/trigger", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ attemptId: latestAttemptId })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const generatedToken = data.token;
+        const link = `${window.location.origin}/parent/celebrate/${generatedToken}`;
+        setShareLink(link);
+        setShowCelebrationShareModal(true);
+      } else {
+        throw new Error("Trigger celebration failed");
+      }
+    } catch (e) {
+      console.warn("⚠️ Trigger parent celebration error. Generating fallback link...", e);
+      // Fallback parent celebration token
+      const fallbackToken = `celeb_mock_${Math.random().toString(36).substr(2, 9)}`;
+      const link = `${window.location.origin}/parent/celebrate/${fallbackToken}`;
+      setShareLink(link);
+      setShowCelebrationShareModal(true);
+    } finally {
+      setIsGeneratingShareLink(false);
+    }
+  };
+
   const handleNextQuestion = () => {
     // Clear question states
     setSelectedOption(null);
@@ -760,6 +831,7 @@ function ExerciseScreenContent() {
     } else {
       // Cleared entire unit lesson!
       setShowClearModal(true);
+      contributeToClassMission();
     }
   };
 
@@ -1310,6 +1382,16 @@ function ExerciseScreenContent() {
               </span>
             </div>
 
+            {latestAttemptId && (
+              <button
+                onClick={handleGenerateParentCelebrationLink}
+                disabled={isGeneratingShareLink}
+                className="w-full py-3 mb-3 bg-pastel-purple border-3 border-pastel-purple-border text-pastel-purple-dark font-extrabold rounded-2xl text-xs hover:bg-indigo-100/50 active:translate-y-[2px] transition-all bubbly-shadow cursor-pointer select-none flex items-center justify-center gap-1.5"
+              >
+                <span>{isGeneratingShareLink ? "リンクを作成中..." : "✉️ おうちの人にがんばりを伝える！"}</span>
+              </button>
+            )}
+
             <button
               onClick={handleCloseClearModal}
               className="w-full py-4 bg-pastel-green border-3 border-pastel-green-border text-pastel-green-dark font-extrabold rounded-2xl text-base hover:bg-emerald-100/50 active:translate-y-[2px] transition-all bubbly-shadow cursor-pointer select-none"
@@ -1333,6 +1415,60 @@ function ExerciseScreenContent() {
           streakCount={congratsData.streakCount}
           level={congratsData.level}
         />
+      )}
+
+      {/* 6. Parent Celebration Link Share Modal */}
+      {showCelebrationShareModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-center justify-center p-6 select-none animate-fade-in">
+          <div className="bg-white border-4 border-pastel-purple-border rounded-3xl p-6 sm:p-8 max-w-md w-full text-center bubbly-shadow-lg relative overflow-hidden animate-bounce-gentle">
+            <div className="absolute top-0 inset-x-0 h-2 bg-gradient-to-r from-pastel-purple-dark via-pastel-pink-dark to-pastel-blue-dark" />
+            
+            <button
+              onClick={() => setShowCelebrationShareModal(false)}
+              className="absolute top-4 right-4 text-slate-400 font-bold hover:text-slate-600 cursor-pointer"
+            >
+              ✕
+            </button>
+
+            <span className="text-5xl inline-block mb-4">💌</span>
+            
+            <h3 className="text-xl font-extrabold text-slate-800 tracking-tight">
+              おうちの人へがんばりを伝えよう！
+            </h3>
+            
+            <p className="text-xs font-bold text-slate-500 leading-relaxed my-3">
+              がんばった記録とお褒めAIメッセージをパパやママに送ろう！スタンプやお祝いコメントがダッシュボードに返ってくるよ！🧅
+            </p>
+
+            <div className="bg-slate-50 border-2 border-slate-100 p-3 rounded-2xl flex flex-col gap-2 mb-6">
+              <span className="text-[10px] font-black text-slate-400 block text-left">コピーしてLINEやメールで送ってね：</span>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={shareLink}
+                  className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl text-2xs font-mono font-bold focus:outline-none"
+                />
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(shareLink);
+                    alert("お祝いリンクをコピーしたよ！LINEやメールでおうちの人に送ってね！🧅");
+                  }}
+                  className="px-4 py-2 bg-pastel-purple border border-pastel-purple-border text-pastel-purple-dark font-extrabold rounded-xl text-xs active:translate-y-[1px] transition-all cursor-pointer hover:bg-indigo-50/50"
+                >
+                  コピー
+                </button>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowCelebrationShareModal(false)}
+              className="w-full py-3 bg-pastel-purple border-3 border-pastel-purple-border text-pastel-purple-dark font-extrabold rounded-2xl text-xs hover:bg-indigo-100/50 active:translate-y-[2px] transition-all bubbly-shadow cursor-pointer select-none"
+            >
+              とじる
+            </button>
+          </div>
+        </div>
       )}
 
     </div>
