@@ -1,8 +1,18 @@
+export interface TenantMock {
+  id: string;
+  name: string;
+  code: string;
+  plan: string;
+  createdAt: string;
+}
+
 export interface UserMock {
   id: string;
+  tenantId: string;
   email: string;
   passwordHash: string;
   nickname: string;
+  role: 'SYSTEM_ADMIN' | 'TENANT_ADMIN' | 'TEACHER' | 'STUDENT' | 'PARENT';
   schoolYear: number;
   currentXp: number;
   level: number;
@@ -13,6 +23,38 @@ export interface UserMock {
   lastAiHintDate: string | null;
   badges: string[];
   createdAt: string;
+}
+
+export interface ClassMock {
+  id: string;
+  tenantId: string;
+  name: string;
+  grade: number;
+}
+
+export interface ClassEnrollmentMock {
+  id: string;
+  classId: string;
+  userId: string;
+  role: 'TEACHER' | 'STUDENT';
+}
+
+export interface AssignmentMock {
+  id: string;
+  tenantId: string;
+  classId: string;
+  title: string;
+  lessonId: string;
+  dueDate: string;
+  createdAt: string;
+}
+
+export interface StudentAssignmentProgressMock {
+  id: string;
+  assignmentId: string;
+  studentId: string;
+  isCompleted: boolean;
+  completedAt: string | null;
 }
 
 export interface AttemptMock {
@@ -35,17 +77,42 @@ export interface ParentMessageMock {
 }
 
 class MockDatabase {
+  tenants: TenantMock[] = [];
   users: UserMock[] = [];
+  classes: ClassMock[] = [];
+  classEnrollments: ClassEnrollmentMock[] = [];
+  assignments: AssignmentMock[] = [];
+  assignmentProgresses: StudentAssignmentProgressMock[] = [];
   attempts: AttemptMock[] = [];
   parentMessages: ParentMessageMock[] = [];
 
   constructor() {
-    // Seed a default test student
+    // Seed default B2C tenant
+    this.tenants.push({
+      id: 'default-b2c',
+      name: 'デフォルト個人テナント',
+      code: 'b2c',
+      plan: 'STANDARD',
+      createdAt: new Date().toISOString(),
+    });
+
+    // Seed a test tenant for schools/cram schools
+    this.tenants.push({
+      id: 'test-tenant-id',
+      name: 'ラッキョ進学塾',
+      code: 'rakkyo-juku',
+      plan: 'PREMIUM',
+      createdAt: new Date().toISOString(),
+    });
+
+    // Seed a default test student in the test tenant
     this.users.push({
       id: 'test-student-id',
+      tenantId: 'test-tenant-id',
       email: 'student@rakkyo.com',
       passwordHash: '$2a$10$fW38C222nIeG4mBwH2zHze8/yQ/JzR57Q4vGvI2V6cR2fX94e/sS.', // password: 'password123'
       nickname: 'ラッキョくん',
+      role: 'STUDENT',
       schoolYear: 1,
       currentXp: 45,
       level: 2,
@@ -55,7 +122,50 @@ class MockDatabase {
       aiHintCountToday: 0,
       lastAiHintDate: null,
       badges: ['🎉 冒険のはじまり'],
-      createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(), // Created 5 days ago
+      createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+
+    // Seed a test teacher in the test tenant
+    this.users.push({
+      id: 'test-teacher-id',
+      tenantId: 'test-tenant-id',
+      email: 'teacher@rakkyo.com',
+      passwordHash: '$2a$10$fW38C222nIeG4mBwH2zHze8/yQ/JzR57Q4vGvI2V6cR2fX94e/sS.', // password: 'password123'
+      nickname: 'ラッキョ先生',
+      role: 'TEACHER',
+      schoolYear: 1,
+      currentXp: 0,
+      level: 1,
+      streakCount: 0,
+      lastActiveDate: null,
+      parentalConsent: false,
+      aiHintCountToday: 0,
+      lastAiHintDate: null,
+      badges: [],
+      createdAt: new Date().toISOString(),
+    });
+
+    // Seed a test class
+    this.classes.push({
+      id: 'test-class-id',
+      tenantId: 'test-tenant-id',
+      name: '中1数学特訓クラス',
+      grade: 1,
+    });
+
+    // Enroll teacher and student into class
+    this.classEnrollments.push({
+      id: 'enroll_teacher_1',
+      classId: 'test-class-id',
+      userId: 'test-teacher-id',
+      role: 'TEACHER',
+    });
+
+    this.classEnrollments.push({
+      id: 'enroll_student_1',
+      classId: 'test-class-id',
+      userId: 'test-student-id',
+      role: 'STUDENT',
     });
 
     // Seed mock attempts for parent dashboard visualization
@@ -178,8 +288,34 @@ class MockDatabase {
     );
   }
 
-  findUserByEmail(email: string): UserMock | undefined {
-    return this.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  // Tenant helpers
+  findTenantByCode(code: string): TenantMock | undefined {
+    return this.tenants.find(t => t.code.toLowerCase() === code.toLowerCase());
+  }
+
+  findTenantById(id: string): TenantMock | undefined {
+    return this.tenants.find(t => t.id === id);
+  }
+
+  createTenant(name: string, code: string): TenantMock {
+    const newTenant: TenantMock = {
+      id: 'tenant_' + Math.random().toString(36).substr(2, 9),
+      name,
+      code: code.toLowerCase(),
+      plan: 'STANDARD',
+      createdAt: new Date().toISOString()
+    };
+    this.tenants.push(newTenant);
+    return newTenant;
+  }
+
+  // User helpers
+  findUserByEmail(email: string, tenantId?: string): UserMock | undefined {
+    // If tenantId is provided, filter by it as well (different tenants can have the same email)
+    return this.users.find(u => 
+      u.email.toLowerCase() === email.toLowerCase() && 
+      (!tenantId || u.tenantId === tenantId)
+    );
   }
 
   findUserById(id: string): UserMock | undefined {
@@ -211,6 +347,106 @@ class MockDatabase {
     return user;
   }
 
+  // Class helpers
+  createClass(tenantId: string, name: string, grade: number): ClassMock {
+    const newClass: ClassMock = {
+      id: 'class_' + Math.random().toString(36).substr(2, 9),
+      tenantId,
+      name,
+      grade
+    };
+    this.classes.push(newClass);
+    return newClass;
+  }
+
+  getTeacherClasses(teacherId: string): ClassMock[] {
+    const classIds = this.classEnrollments
+      .filter(e => e.userId === teacherId && e.role === 'TEACHER')
+      .map(e => e.classId);
+    return this.classes.filter(c => classIds.includes(c.id));
+  }
+
+  getClassStudents(classId: string): UserMock[] {
+    const studentIds = this.classEnrollments
+      .filter(e => e.classId === classId && e.role === 'STUDENT')
+      .map(e => e.userId);
+    return this.users.filter(u => studentIds.includes(u.id));
+  }
+
+  enrollUserInClass(classId: string, userId: string, role: 'TEACHER' | 'STUDENT'): ClassEnrollmentMock {
+    const newEnrollment: ClassEnrollmentMock = {
+      id: 'enroll_' + Math.random().toString(36).substr(2, 9),
+      classId,
+      userId,
+      role
+    };
+    this.classEnrollments.push(newEnrollment);
+    return newEnrollment;
+  }
+
+  // Assignment helpers
+  createAssignment(tenantId: string, classId: string, title: string, lessonId: string, dueDate: string): AssignmentMock {
+    const newAssignment: AssignmentMock = {
+      id: 'assignment_' + Math.random().toString(36).substr(2, 9),
+      tenantId,
+      classId,
+      title,
+      lessonId,
+      dueDate,
+      createdAt: new Date().toISOString()
+    };
+    this.assignments.push(newAssignment);
+
+    // Auto-create assignment progresses for all students in the class
+    const students = this.getClassStudents(classId);
+    students.forEach(s => {
+      this.assignmentProgresses.push({
+        id: 'progress_' + Math.random().toString(36).substr(2, 9),
+        assignmentId: newAssignment.id,
+        studentId: s.id,
+        isCompleted: false,
+        completedAt: null
+      });
+    });
+
+    return newAssignment;
+  }
+
+  getStudentAssignments(studentId: string): (AssignmentMock & { isCompleted: boolean })[] {
+    const progresses = this.assignmentProgresses.filter(p => p.studentId === studentId);
+    return progresses.map(p => {
+      const assignment = this.assignments.find(a => a.id === p.assignmentId)!;
+      return {
+        ...assignment,
+        isCompleted: p.isCompleted
+      };
+    }).filter(a => a !== undefined);
+  }
+
+  getClassAssignments(classId: string): (AssignmentMock & { completedCount: number; totalCount: number })[] {
+    const classAss = this.assignments.filter(a => a.classId === classId);
+    return classAss.map(a => {
+      const progs = this.assignmentProgresses.filter(p => p.assignmentId === a.id);
+      const completedCount = progs.filter(p => p.isCompleted).length;
+      return {
+        ...a,
+        completedCount,
+        totalCount: progs.length
+      };
+    });
+  }
+
+  updateAssignmentProgress(assignmentId: string, studentId: string, isCompleted: boolean): boolean {
+    const prog = this.assignmentProgresses.find(p => p.assignmentId === assignmentId && p.studentId === studentId);
+    if (prog) {
+      prog.isCompleted = isCompleted;
+      prog.completedAt = isCompleted ? new Date().toISOString() : null;
+      return true;
+    }
+    return false;
+  }
+
+  // Attempt & message helpers
   createAttempt(attempt: Omit<AttemptMock, 'id' | 'createdAt'>): AttemptMock {
     const newAttempt: AttemptMock = {
       ...attempt,
@@ -218,6 +454,11 @@ class MockDatabase {
       createdAt: new Date().toISOString(),
     };
     this.attempts.push(newAttempt);
+
+    // If this attempt is for a lesson that has an assignment, check if the student has completed the assignment
+    // (For simplicity, we assume if they complete a question in that lesson, it might contribute to assignment completion)
+    // Actually, in actual integration they will submit and if completed we update the assignment.
+    
     return newAttempt;
   }
 

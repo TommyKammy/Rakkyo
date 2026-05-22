@@ -418,13 +418,19 @@ export default function WelcomePage() {
           </form>
         )}
 
-        {/* Parent Portal Link */}
-        <div className="mt-6 text-center border-t border-slate-100 pt-4">
+        {/* Parent & Teacher Portal Links */}
+        <div className="mt-6 text-center border-t border-slate-100 pt-4 flex flex-col space-y-2.5">
           <button
             onClick={() => router.push("/parent")}
-            className="text-xs font-bold text-slate-400 hover:text-slate-600 transition-colors inline-flex items-center gap-1 cursor-pointer bg-transparent border-0"
+            className="text-xs font-bold text-slate-400 hover:text-slate-600 transition-colors inline-flex items-center justify-center gap-1 cursor-pointer bg-transparent border-0"
           >
             📊 保護者用のレポート画面はこちら
+          </button>
+          <button
+            onClick={() => router.push("/teacher")}
+            className="text-xs font-bold text-slate-400 hover:text-indigo-500 transition-colors inline-flex items-center justify-center gap-1 cursor-pointer bg-transparent border-0"
+          >
+            🏢 塾・学校の先生用ダッシュボードはこちら 🧅
           </button>
         </div>
       </div>

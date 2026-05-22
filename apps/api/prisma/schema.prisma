@@ -7,24 +7,126 @@ generator client {
   provider = "prisma-client-js"
 }
 
+enum Role {
+  SYSTEM_ADMIN
+  TENANT_ADMIN
+  TEACHER
+  STUDENT
+  PARENT
+}
+
+enum ClassRole {
+  TEACHER
+  STUDENT
+}
+
+model Tenant {
+  id          String       @id @default(uuid())
+  name        String
+  code        String       @unique // e.g. "shibuya-juku"
+  plan        String       @default("STANDARD")
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  users       User[]
+  classes     Class[]
+  assignments Assignment[]
+
+  @@index([code])
+}
+
 model User {
-  id             String      @id @default(uuid())
-  email          String      @unique
-  password       String
-  nickname       String
-  schoolYear     Int         @default(1) // Grade 1, 2, 3
-  currentXp      Int         @default(0)
-  level          Int         @default(1)
-  streakCount    Int         @default(0)
-  lastActiveDate DateTime?
-  parentalConsent Boolean    @default(false)
-  aiHintCountToday Int       @default(0)
-  lastAiHintDate  String?
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
-  attempts       Attempt[]
-  badges         UserBadge[]
-  parentMessages ParentMessage[]
+  id               String                      @id @default(uuid())
+  tenantId         String                      @default("default-b2c")
+  tenant           Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email            String
+  password         String
+  nickname         String
+  role             Role                        @default(STUDENT)
+  schoolYear       Int                         @default(1) // Grade 1, 2, 3
+  currentXp        Int                         @default(0)
+  level            Int                         @default(1)
+  streakCount      Int                         @default(0)
+  lastActiveDate   DateTime?
+  parentalConsent  Boolean                     @default(false)
+  aiHintCountToday Int                         @default(0)
+  lastAiHintDate   String?
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
+  attempts         Attempt[]
+  badges           UserBadge[]
+  parentMessages   ParentMessage[]
+  classes          ClassEnrollment[]
+  
+  // As student: progresses for homework assignments
+  assignmentProgresses StudentAssignmentProgress[]
+  
+  // As parent: parent relations (Parent-Child)
+  parentRelations  ParentChildRelation[]       @relation("ChildToParent")
+  childRelations   ParentChildRelation[]       @relation("ParentToChild")
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Class {
+  id          String            @id @default(uuid())
+  tenantId    String
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  grade       Int               // Grade year
+  enrollments ClassEnrollment[]
+  assignments Assignment[]
+
+  @@index([tenantId])
+}
+
+model ClassEnrollment {
+  id        String    @id @default(uuid())
+  classId   String
+  class     Class     @relation(fields: [classId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      ClassRole @default(STUDENT)
+
+  @@unique([classId, userId])
+}
+
+model ParentChildRelation {
+  id        String @id @default(uuid())
+  parentId  String
+  parent    User   @relation("ParentToChild", fields: [parentId], references: [id], onDelete: Cascade)
+  childId   String
+  child     User   @relation("ChildToParent", fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([parentId, childId])
+}
+
+model Assignment {
+  id          String                      @id @default(uuid())
+  tenantId    String
+  tenant      Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  classId     String
+  class       Class                       @relation(fields: [classId], references: [id], onDelete: Cascade)
+  title       String
+  lessonId    String                      // Targets a curriculum Lesson ID
+  dueDate     DateTime
+  createdAt   DateTime                    @default(now())
+  progresses  StudentAssignmentProgress[]
+
+  @@index([tenantId])
+  @@index([classId])
+}
+
+model StudentAssignmentProgress {
+  id           String     @id @default(uuid())
+  assignmentId String
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  studentId    String
+  student      User       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  isCompleted  Boolean    @default(false)
+  completedAt  DateTime?
+
+  @@unique([assignmentId, studentId])
 }
 
 model Subject {
