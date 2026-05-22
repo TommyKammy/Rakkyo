@@ -54,4 +54,11 @@ export interface CollaborativeRepository {
     isCompleted: boolean;
   }[]): Promise<void>;
   findAssignmentProgresses(assignmentId: string): Promise<any[]>;
+  // Phase-15.5: out-of-band safety notification queue
+  createSafetyAlert(data: {
+    childUserId: string;
+    alertType: string;
+    payload: string;
+  }): Promise<any>;
+  findSafetyAlertsByChild(childUserId: string): Promise<any[]>;
 }

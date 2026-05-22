@@ -3,9 +3,13 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { AuthenticatedRequest } from '../middlewares/auth';
+import { requireSecret } from '../utils/secrets';
 
 const router = Router();
-const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'rakkyo-super-secret-key-12345';
+const JWT_SECRET = requireSecret('NEXTAUTH_SECRET', 'rakkyo-super-secret-key-12345');
+
+// Timing attack prevention
+const DUMMY_HASH = bcrypt.hashSync('dummy-password-hash-to-prevent-timing-attacks', 10);
 
 const registerSchema = z.object({
   email: z.string().email(),
@@ -89,7 +93,7 @@ router.post('/register', async (req: Request, res, next) => {
         currentXp: user.currentXp,
         level: user.level,
         streakCount: user.streakCount,
-        isMock: !!authReq.isMock
+        ...(process.env.NODE_ENV !== 'production' ? { isMock: !!authReq.isMock } : {})
       }
     });
   } catch (error) {
@@ -120,30 +124,32 @@ router.post('/login', async (req: Request, res, next) => {
           plan: 'FREE'
         });
       } else {
+        // テナントが存在しない場合もタイミングを均一化するためダミー比較を実行
+        bcrypt.compareSync(parsed.password, DUMMY_HASH);
         res.status(401).json({ error: '塾・学校コードが正しくありません。' });
         return;
       }
     }
 
     const user = await authReq.repos!.users.findByEmail(parsed.email);
-    if (!user || user.tenantId !== tenant.id) {
-      res.status(401).json({ error: 'メールアドレスまたはパスワードが正しくありません。' });
-      return;
-    }
-
-    const passwordHash = user.password;
+    
+    // ユーザーが存在し、且つテナントが一致するかどうかを論理チェック
+    const isValidUser = user !== null && user.tenantId === tenant.id;
+    const passwordHash = isValidUser ? user!.password : DUMMY_HASH;
+    
+    // 常に bcrypt 比較を実行
     const isPasswordValid = bcrypt.compareSync(parsed.password, passwordHash);
 
-    if (!isPasswordValid) {
+    if (!isValidUser || !isPasswordValid) {
       res.status(401).json({ error: 'メールアドレスまたはパスワードが正しくありません。' });
       return;
     }
 
     const token = jwt.sign(
       { 
-        userId: user.id, 
-        tenantId: user.tenantId, 
-        role: user.role 
+        userId: user!.id, 
+        tenantId: user!.tenantId, 
+        role: user!.role 
       }, 
       JWT_SECRET, 
       { expiresIn: '7d' }
@@ -152,17 +158,17 @@ router.post('/login', async (req: Request, res, next) => {
     res.json({
       token,
       user: {
-        id: user.id,
-        tenantId: user.tenantId,
-        role: user.role,
-        email: user.email,
-        nickname: user.nickname,
-        schoolYear: user.schoolYear,
-        parentalConsent: user.parentalConsent,
-        currentXp: user.currentXp,
-        level: user.level,
-        streakCount: user.streakCount,
-        isMock: !!authReq.isMock
+        id: user!.id,
+        tenantId: user!.tenantId,
+        role: user!.role,
+        email: user!.email,
+        nickname: user!.nickname,
+        schoolYear: user!.schoolYear,
+        parentalConsent: user!.parentalConsent,
+        currentXp: user!.currentXp,
+        level: user!.level,
+        streakCount: user!.streakCount,
+        ...(process.env.NODE_ENV !== 'production' ? { isMock: !!authReq.isMock } : {})
       }
     });
   } catch (error) {

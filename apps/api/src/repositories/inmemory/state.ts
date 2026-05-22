@@ -21,6 +21,9 @@ export interface UserMock {
   parentalConsent: boolean;
   aiHintCountToday: number;
   lastAiHintDate: string | null;
+  abuseCount: number;
+  abuseLastAt: string | null;
+  lockedUntil: string | null;
   badges: string[];
   createdAt: string;
 }
@@ -119,6 +122,16 @@ export interface ParentalCelebrationMock {
   updatedAt: string;
 }
 
+export interface SafetyAlertMock {
+  id: string;
+  childUserId: string;
+  alertType: string;
+  payload: string;
+  status: 'QUEUED' | 'SENT' | 'FAILED';
+  createdAt: string;
+  sentAt: string | null;
+}
+
 class InMemoryState {
   tenants: TenantMock[] = [];
   users: UserMock[] = [];
@@ -133,6 +146,7 @@ class InMemoryState {
   hiramekiTips: HiramekiTipMock[] = [];
   classMissions: ClassMissionMock[] = [];
   parentalCelebrations: ParentalCelebrationMock[] = [];
+  safetyAlerts: SafetyAlertMock[] = [];
 
   constructor() {
     this.seed();
@@ -152,6 +166,7 @@ class InMemoryState {
     this.hiramekiTips = [];
     this.classMissions = [];
     this.parentalCelebrations = [];
+    this.safetyAlerts = [];
     this.seed();
   }
 
@@ -190,6 +205,9 @@ class InMemoryState {
       parentalConsent: true,
       aiHintCountToday: 0,
       lastAiHintDate: null,
+      abuseCount: 0,
+      abuseLastAt: null,
+      lockedUntil: null,
       badges: ['🎉 冒険のはじまり'],
       createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
     });
@@ -210,6 +228,9 @@ class InMemoryState {
       parentalConsent: false,
       aiHintCountToday: 0,
       lastAiHintDate: null,
+      abuseCount: 0,
+      abuseLastAt: null,
+      lockedUntil: null,
       badges: [],
       createdAt: new Date().toISOString(),
     });
@@ -408,6 +429,9 @@ class InMemoryState {
         parentalConsent: true,
         aiHintCountToday: 0,
         lastAiHintDate: null,
+        abuseCount: 0,
+        abuseLastAt: null,
+        lockedUntil: null,
         badges: [],
         createdAt: new Date().toISOString()
       });

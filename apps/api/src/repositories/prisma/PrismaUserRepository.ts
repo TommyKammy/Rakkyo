@@ -115,7 +115,22 @@ export class PrismaUserRepository implements UserRepository {
   async deleteUserData(userId: string): Promise<void> {
     // 忘れられる権利のトランザクション削除 (旧 users.ts の移植)
     await prisma.$transaction(async (tx) => {
-      // 1. onDelete: Cascade がないものを手動削除
+      // 1. onDelete: Cascade がない、あるいは不整合を防ぐため手動削除
+      await tx.parentalCelebration.deleteMany({
+        where: { childId: userId }
+      });
+      await tx.peerStamp.deleteMany({
+        where: { OR: [{ senderId: userId }, { receiverId: userId }] }
+      });
+      await tx.hiramekiTip.deleteMany({
+        where: { userId }
+      });
+      await tx.classEnrollment.deleteMany({
+        where: { userId }
+      });
+      await tx.studentAssignmentProgress.deleteMany({
+        where: { studentId: userId }
+      });
       await tx.parentMessage.deleteMany({
         where: { userId }
       });

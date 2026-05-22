@@ -31,6 +31,9 @@ export class InMemoryUserRepository implements UserRepository {
       lastActiveDate: null,
       aiHintCountToday: 0,
       lastAiHintDate: null,
+      abuseCount: 0,
+      abuseLastAt: null,
+      lockedUntil: null,
       badges: [],
       createdAt: new Date().toISOString(),
     };
@@ -50,7 +53,13 @@ export class InMemoryUserRepository implements UserRepository {
       lastActiveDate: data.lastActiveDate
         ? (data.lastActiveDate instanceof Date ? data.lastActiveDate.toISOString() : (data.lastActiveDate as any as string))
         : user.lastActiveDate,
-      lastAiHintDate: data.lastAiHintDate ? data.lastAiHintDate : user.lastAiHintDate
+      lastAiHintDate: data.lastAiHintDate ? data.lastAiHintDate : user.lastAiHintDate,
+      abuseLastAt: data.abuseLastAt
+        ? (data.abuseLastAt instanceof Date ? data.abuseLastAt.toISOString() : (data.abuseLastAt as any as string))
+        : user.abuseLastAt,
+      lockedUntil: data.lockedUntil
+        ? (data.lockedUntil instanceof Date ? data.lockedUntil.toISOString() : (data.lockedUntil as any as string))
+        : user.lockedUntil
     });
     
     return { ...user, password: user.passwordHash } as any as User;

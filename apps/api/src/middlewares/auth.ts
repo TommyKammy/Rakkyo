@@ -2,9 +2,9 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { tenantStorage } from '../db';
 import { RepositoryContainer } from '../repositories';
-import { inMemoryRepos } from '../repositories/inmemory';
+import { requireSecret } from '../utils/secrets';
 
-const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'rakkyo-super-secret-key-12345';
+const JWT_SECRET = requireSecret('NEXTAUTH_SECRET', 'rakkyo-super-secret-key-12345');
 
 export interface AuthenticatedRequest extends Request {
   userId?: string;
@@ -34,59 +34,44 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     authReq.tenantId = tenantId;
     authReq.role = role;
 
-    // Safety initialization check (if middleware was skipped)
+    // The repositoryMiddleware should have set req.repos before authMiddleware runs.
+    // We intentionally do NOT fall back to InMemory here: a missing repo container
+    // means the middleware chain is misconfigured and we want loud failure rather
+    // than silent demo-data leakage in production.
     if (!authReq.repos) {
-      const isMockHeader = authReq.headers['x-mock-db'] === 'true';
-      const isTest = process.env.NODE_ENV === 'test';
-      authReq.isMock = isTest || isMockHeader;
-      const { prismaRepos } = require('../repositories/prisma');
-      authReq.repos = authReq.isMock ? inMemoryRepos : prismaRepos;
+      console.error(
+        'FATAL: authMiddleware invoked before repositoryMiddleware. Refusing to authenticate.'
+      );
+      res.status(500).json({ error: 'サーバー設定エラーが発生しました。' });
+      return;
     }
 
     const proceed = async () => {
+      let user;
       try {
-        const repos = authReq.repos!;
-        if (process.env.NODE_ENV === 'test' && !authReq.isMock) {
-          throw new Error('Test environment: Forcing Mock DB');
-        }
-
-        const user = await repos.users.findById(decoded.userId);
-        if (user) {
-          authReq.user = user;
-        } else {
-          // If not found in PrismaRepository, fallback to In-memory
-          if (!authReq.isMock) {
-            console.warn('⚠️ User not found in Prisma repository. Falling back to In-memory Repository.');
-            authReq.isMock = true;
-            authReq.repos = inMemoryRepos;
-            const fallbackRepos = authReq.repos!;
-            const mockUser = await fallbackRepos.users.findById(decoded.userId);
-            if (mockUser) {
-              authReq.user = mockUser;
-            } else {
-              res.status(401).json({ error: 'ユーザーが見つかりません。' });
-              return;
-            }
-          } else {
-            res.status(401).json({ error: 'ユーザーが見つかりません。' });
-            return;
-          }
-        }
+        user = await authReq.repos!.users.findById(decoded.userId);
       } catch (dbError) {
-        if (!authReq.isMock) {
-          console.warn('⚠️ Database query failed in authMiddleware. Falling back to In-memory Repository.');
-          authReq.isMock = true;
-          authReq.repos = inMemoryRepos;
-          const fallbackRepos = authReq.repos!;
-          const mockUser = await fallbackRepos.users.findById(decoded.userId);
-          if (mockUser) {
-            authReq.user = mockUser;
-          } else {
-            res.status(401).json({ error: 'ユーザーが見つかりません。(Mock)' });
-            return;
-          }
-        } else {
-          res.status(401).json({ error: 'ユーザーが見つかりません。(Mock)' });
+        // Database errors must surface as 500, never as a silent switch to
+        // an in-memory store that may contain seeded demo accounts.
+        console.error('authMiddleware DB lookup failed:', dbError);
+        res.status(500).json({ error: '一時的にサインインできません。少し時間をおいてからもう一度試してください。' });
+        return;
+      }
+
+      if (!user) {
+        res.status(401).json({ error: 'ユーザーが見つかりません。' });
+        return;
+      }
+      authReq.user = user;
+
+      // 24時間ハードロックのチェック
+      if (user.lockedUntil) {
+        const lockedUntilDate = new Date(user.lockedUntil);
+        if (lockedUntilDate > new Date()) {
+          res.status(403).json({
+            error: 'safety_lock',
+            message: '安全確保のため、アカウントが24時間ロックされています。保護者または先生に確認してね 🧅'
+          });
           return;
         }
       }

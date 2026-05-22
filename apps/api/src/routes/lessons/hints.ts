@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authMiddleware, AuthenticatedRequest } from '../../middlewares/auth';
 import { allCurriculums } from '@rakkyo/curriculum';
 import { AiTutorProviderFactory, AiResponseCache, SafetyFilter } from '@rakkyo/ai-tutor';
+import { recordAbuseStrike } from '../../utils/abuseTracker';
 
 const router = Router();
 
@@ -42,12 +43,30 @@ router.post('/hint', authMiddleware, async (req: AuthenticatedRequest, res: Resp
     lastHintRequestTimes.set(userId, now);
 
     // --- 2. Abuse不適切入力検知 ---
+    // NOTE: We intentionally do NOT reset abuseCount on a clean follow-up
+    // input. The counter decays purely via the 1-hour rolling window
+    // inside recordAbuseStrike, so an attacker cannot alternate
+    // abuse/clean to dodge the hard-lock.
     if (parsed.userQuestion && SafetyFilter.isAbusive(parsed.userQuestion)) {
+      const strike = await recordAbuseStrike(repos, userId, 'hint');
+
+      if (strike.isLocked) {
+        res.json({
+          hintText: "**安全確保のため、アカウントが24時間ロックされました。保護者または先生に確認してね 🧅**",
+          stage: parsed.hintsUsed,
+          fromCache: false,
+          isAbusive: true,
+          locked: true
+        });
+        return;
+      }
+
       res.json({
-        hintText: "**ラッキョくんとはお勉強のお話をしてほしいな！いっしょに問題を解いてみよう 🧅**",
+        hintText: `**ラッキョくんとはお勉強のお話をしてほしいな！不適切な入力を続けると、安全のため一時的にロックされるよ（警告: ${strike.newCount}/3）🧅**`,
         stage: parsed.hintsUsed,
         fromCache: false,
-        isAbusive: true
+        isAbusive: true,
+        warningCount: strike.newCount
       });
       return;
     }

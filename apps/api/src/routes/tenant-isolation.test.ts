@@ -138,6 +138,9 @@ describe('Multi-Tenant Isolation & Teacher Protection', () => {
         parentalConsent: false,
         aiHintCountToday: 0,
         lastAiHintDate: null,
+        abuseCount: 0,
+        abuseLastAt: null,
+        lockedUntil: null,
         badges: [],
         createdAt: new Date().toISOString(),
       };
@@ -158,6 +161,9 @@ describe('Multi-Tenant Isolation & Teacher Protection', () => {
         parentalConsent: false,
         aiHintCountToday: 0,
         lastAiHintDate: null,
+        abuseCount: 0,
+        abuseLastAt: null,
+        lockedUntil: null,
         badges: [],
         createdAt: new Date().toISOString(),
       };

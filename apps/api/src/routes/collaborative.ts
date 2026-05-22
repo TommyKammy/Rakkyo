@@ -2,9 +2,20 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import crypto from 'crypto';
 import { authMiddleware, AuthenticatedRequest } from '../middlewares/auth';
+import { requireSecret } from '../utils/secrets';
+import { recordAbuseStrike } from '../utils/abuseTracker';
 import { SafetyFilter } from '@rakkyo/ai-tutor';
 
 const router = Router();
+
+const CELEBRATION_HMAC_SECRET = requireSecret(
+  'CELEBRATION_HMAC_SECRET',
+  'rakkyo-dev-celebration-hmac-insecure'
+);
+const HIRAMEKI_NICKNAME_SECRET = requireSecret(
+  'RAKKYO_NICKNAME_SECRET',
+  'rakkyo-dev-nickname-hmac-insecure'
+);
 
 // Validation Schemas
 const stampSchema = z.object({
@@ -243,22 +254,43 @@ router.post('/hirameki', authMiddleware, async (req: AuthenticatedRequest, res: 
       classId = enrollment.classId;
     }
 
-    // Safety Filter Check!
-    const isSafe = !SafetyFilter.isAbusive(content);
-    if (!isSafe) {
+    // Safety Filter Check — abusive posts here also count toward the
+    // 24-hour hard-lock so users cannot bypass the hint-route counter
+    // by funneling abuse through the Hirameki board instead.
+    if (SafetyFilter.isAbusive(content)) {
+      const strike = await recordAbuseStrike(repos, userId, 'hirameki');
+      if (strike.isLocked) {
+        return res.status(403).json({
+          error: 'safety_lock',
+          message: '安全確保のため、アカウントが24時間ロックされました。保護者または先生に確認してね 🧅',
+          locked: true
+        });
+      }
       return res.status(400).json({
         error: 'abusive_content',
-        message: 'あれっ、もう少し優しい言葉を使ってみようかな？ Onion君も悲しんじゃうかも。🧅'
+        message: 'あれっ、もう少し優しい言葉を使ってみようかな？ Onion君も悲しんじゃうかも。🧅',
+        warningCount: strike.newCount
       });
     }
 
-    // Assign a cute random nickname with a unique user suffix to prevent abuse/impersonation
+    // Assign a cute random nickname with a unique user suffix using deterministic HMAC masking.
+    // monthBucket is computed in UTC so classmates across DST/timezone edges see the same suffix.
+    const now = new Date();
+    const monthBucket = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    const hmacData = `${userId}-${classId}-${monthBucket}`;
+    const hmacHash = crypto
+      .createHmac('sha256', HIRAMEKI_NICKNAME_SECRET)
+      .update(hmacData)
+      .digest('hex');
+
     const nicknames = ['がんばるオニオン', 'ひらめきラッキョ', 'あきらめないネギ', 'スラスラにんにく', 'にこにこキャベツ'];
-    const baseNickname = nicknames[Math.floor(Math.random() * nicknames.length)];
-    
-    // Generate unique 4-digit suffix from user ID SHA-256
-    const hash = crypto.createHash('sha256').update(userId).digest('hex');
-    const code = (parseInt(hash.substring(0, 8), 16) % 9000) + 1000;
+    const nicknameIndex = parseInt(hmacHash.substring(0, 8), 16) % nicknames.length;
+    const baseNickname = nicknames[nicknameIndex];
+
+    // 6-digit suffix (100000-999999). For a 30-student class this drops
+    // birthday-paradox collision probability from ~5% (at 4 digits) to
+    // well under 0.05%.
+    const code = (parseInt(hmacHash.substring(8, 16), 16) % 900000) + 100000;
     const nickname = `${baseNickname}#${code}`;
 
     const tip = await repos.collaborative.createHiramekiTip({
@@ -274,6 +306,16 @@ router.post('/hirameki', authMiddleware, async (req: AuthenticatedRequest, res: 
   }
 });
 
+interface CelebrationPayload {
+  childId: string;
+  attemptId: string;
+  random: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+const CELEBRATION_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+
 // 8. POST /celebration/trigger - Trigger an celebration for a hard-won victory (Grit!)
 router.post('/celebration/trigger', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -281,15 +323,28 @@ router.post('/celebration/trigger', authMiddleware, async (req: AuthenticatedReq
     const repos = req.repos!;
     const { attemptId } = z.object({ attemptId: z.string() }).parse(req.body);
 
-    const token = 'celeb_' + crypto.randomBytes(32).toString('base64url');
-    const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // 14 days expiration
+    const now = Date.now();
+    const expiresAtMs = now + CELEBRATION_TTL_MS;
+    const payload: CelebrationPayload = {
+      childId,
+      attemptId,
+      random: crypto.randomBytes(16).toString('hex'),
+      createdAt: now,
+      expiresAt: expiresAtMs
+    };
+    const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = crypto
+      .createHmac('sha256', CELEBRATION_HMAC_SECRET)
+      .update(payloadB64)
+      .digest('base64url');
+    const token = `${payloadB64}.${signature}`;
 
     const celeb = await repos.collaborative.createParentalCelebration({
       childId,
       attemptId,
       token,
       isResponded: false,
-      expiresAt
+      expiresAt: new Date(expiresAtMs)
     });
     res.json({ success: true, token, celebrationId: celeb.id });
   } catch (e: any) {
@@ -297,20 +352,75 @@ router.post('/celebration/trigger', authMiddleware, async (req: AuthenticatedReq
   }
 });
 
+type CelebrationVerifyResult =
+  | { ok: true; payload: CelebrationPayload }
+  | { ok: false; reason: 'bad_signature' | 'expired' | 'malformed' };
+
+/**
+ * Verifies a celebration token. The token's signed payload is the
+ * authoritative source for expiry — mutating the DB row's expiresAt cannot
+ * lengthen a token's lifetime.
+ */
+function verifyCelebrationToken(token: string): CelebrationVerifyResult {
+  const parts = token.split('.');
+  if (parts.length !== 2) return { ok: false, reason: 'malformed' };
+  const [payloadB64, signature] = parts;
+
+  let signatureMatches = false;
+  try {
+    const expectedSignature = crypto
+      .createHmac('sha256', CELEBRATION_HMAC_SECRET)
+      .update(payloadB64)
+      .digest('base64url');
+    const expectedBuffer = Buffer.from(expectedSignature, 'utf-8');
+    const signatureBuffer = Buffer.from(signature, 'utf-8');
+    if (expectedBuffer.length === signatureBuffer.length) {
+      signatureMatches = crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
+    }
+  } catch {
+    return { ok: false, reason: 'bad_signature' };
+  }
+  if (!signatureMatches) return { ok: false, reason: 'bad_signature' };
+
+  let payload: CelebrationPayload;
+  try {
+    const decoded = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf-8'));
+    if (
+      typeof decoded?.childId !== 'string' ||
+      typeof decoded?.attemptId !== 'string' ||
+      typeof decoded?.expiresAt !== 'number'
+    ) {
+      return { ok: false, reason: 'malformed' };
+    }
+    payload = decoded as CelebrationPayload;
+  } catch {
+    return { ok: false, reason: 'malformed' };
+  }
+
+  if (payload.expiresAt < Date.now()) {
+    return { ok: false, reason: 'expired' };
+  }
+
+  return { ok: true, payload };
+}
+
 // 9. GET /celebration/:token - Get parental celebration details for shared link
 router.get('/celebration/:token', async (req: AuthenticatedRequest, res) => {
   try {
     const { token } = req.params;
     const repos = req.repos!;
 
-    const celeb = await repos.collaborative.findParentalCelebrationByToken(token);
-
-    if (!celeb) {
-      return res.status(404).json({ error: 'お祝いリンクが見つかりませんでした' });
+    const verification = verifyCelebrationToken(token);
+    if (!verification.ok) {
+      if (verification.reason === 'expired') {
+        return res.status(400).json({ error: 'お祝いリンクの有効期限が切れています' });
+      }
+      return res.status(400).json({ error: 'お祝いリンクの署名が無効です' });
     }
 
-    if (new Date(celeb.expiresAt).getTime() < Date.now()) {
-      return res.status(400).json({ error: 'お祝いリンクの有効期限が切れています' });
+    const celeb = await repos.collaborative.findParentalCelebrationByToken(token);
+    if (!celeb) {
+      return res.status(404).json({ error: 'お祝いリンクが見つかりませんでした' });
     }
 
     const childNickname = celeb.child ? celeb.child.nickname : 'ともだち';
@@ -351,6 +461,14 @@ router.post('/celebration/:token/respond', async (req: AuthenticatedRequest, res
     const repos = req.repos!;
     const { stamp, comment } = respondSchema.parse(req.body);
 
+    const verification = verifyCelebrationToken(token);
+    if (!verification.ok) {
+      if (verification.reason === 'expired') {
+        return res.status(400).json({ error: 'お祝いリンクの有効期限が切れているか、すでに応答済みです' });
+      }
+      return res.status(400).json({ error: 'お祝いリンクの署名が無効です' });
+    }
+
     // Safety Filter Check on Parent Comment
     if (comment) {
       const isSafe = !SafetyFilter.isAbusive(comment);
@@ -367,7 +485,7 @@ router.post('/celebration/:token/respond', async (req: AuthenticatedRequest, res
       return res.status(404).json({ error: 'お祝いリンクが見つかりませんでした' });
     }
 
-    if (celeb.isResponded || new Date(celeb.expiresAt).getTime() < Date.now()) {
+    if (celeb.isResponded) {
       return res.status(400).json({ error: 'お祝いリンクの有効期限が切れているか、すでに応答済みです' });
     }
 

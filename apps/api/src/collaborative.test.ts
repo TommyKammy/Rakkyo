@@ -181,8 +181,10 @@ describe('Phase-12 Collaborative Learning and Peer Support Integration Tests', (
       expect(cuteNicknames).toContain(parts[0]);
       
       const suffix = Number(parts[1]);
-      expect(suffix).toBeGreaterThanOrEqual(1000);
-      expect(suffix).toBeLessThanOrEqual(9999);
+      // Phase 15.5: suffix widened from 4 to 6 digits to reduce 30-student
+      // birthday-paradox collisions from ~5% to well under 0.05%.
+      expect(suffix).toBeGreaterThanOrEqual(100000);
+      expect(suffix).toBeLessThanOrEqual(999999);
     });
   });
 
@@ -279,8 +281,26 @@ describe('Phase-12 Collaborative Learning and Peer Support Integration Tests', (
     });
 
     it('should block GET and POST requests if the celebration token is expired', async () => {
-      // Create an expired token manually in inMemoryState
-      const expiredToken = 'celeb_expired_mock_token_123';
+      // Create an expired token manually with valid signature in inMemoryState.
+      // Phase 15.5 (Phase D): expiresAt now lives inside the signed payload itself
+      // so the token is the authoritative source of expiry.
+      const payload = {
+        childId: 'test-student-id',
+        attemptId: 'attempt_seed_4',
+        random: 'expired-mock-random',
+        createdAt: Date.now() - 15 * 24 * 60 * 60 * 1000,
+        expiresAt: Date.now() - 24 * 60 * 60 * 1000 // expired 1 day ago
+      };
+      const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+      const CELEBRATION_HMAC_SECRET =
+        process.env.CELEBRATION_HMAC_SECRET || 'rakkyo-dev-celebration-hmac-insecure';
+      const crypto = require('crypto');
+      const signature = crypto
+        .createHmac('sha256', CELEBRATION_HMAC_SECRET)
+        .update(payloadB64)
+        .digest('base64url');
+      const expiredToken = `${payloadB64}.${signature}`;
+
       const celeb = {
         id: 'celeb_expired_123',
         childId: 'test-student-id',
@@ -312,7 +332,7 @@ describe('Phase-12 Collaborative Learning and Peer Support Integration Tests', (
   });
 
   describe('5.5 Phase-15 Advanced UX and Hybrid TTS Integration Tests', () => {
-    it('should assign a fixed 4-digit suffix to anonymous nicknames on Hirameki board', async () => {
+    it('should assign a fixed 6-digit suffix to anonymous nicknames on Hirameki board', async () => {
       const res1 = await request(app)
         .post('/api/collaborative/hirameki')
         .set('Authorization', `Bearer ${token}`)
@@ -404,6 +424,142 @@ describe('Phase-12 Collaborative Learning and Peer Support Integration Tests', (
         if (origGeminiKey) process.env.GEMINI_API_KEY = origGeminiKey;
         if (origGoogleKey) process.env.GOOGLE_API_KEY = origGoogleKey;
       }
+    });
+  });
+
+  describe('5.6 Phase-15.5 Security and Safety Hardening Tests', () => {
+    let abuseStudentToken: string;
+    let abuseStudentId = 'abuse-student-id';
+
+    beforeAll(() => {
+      // Register a dedicated user for abuse tests
+      const abuseStudent = {
+        id: abuseStudentId,
+        tenantId: 'test-tenant-id',
+        email: 'abuse-student@example.com',
+        passwordHash: 'dummy',
+        nickname: '荒らし生徒',
+        role: 'STUDENT',
+        schoolYear: 1,
+        currentXp: 0,
+        level: 1,
+        streakCount: 0,
+        lastActiveDate: null,
+        parentalConsent: true,
+        aiHintCountToday: 0,
+        lastAiHintDate: null,
+        abuseCount: 0,
+        abuseLastAt: null,
+        lockedUntil: null,
+        badges: [],
+        createdAt: new Date().toISOString(),
+      };
+      inMemoryState.users.push(abuseStudent);
+      
+      inMemoryState.classEnrollments.push({
+        id: 'enroll-abuse-student',
+        classId: 'test-class-id',
+        userId: abuseStudentId,
+        role: 'STUDENT',
+      });
+
+      abuseStudentToken = jwt.sign(
+        { userId: abuseStudentId, tenantId: 'test-tenant-id', role: 'STUDENT' },
+        JWT_SECRET
+      );
+    });
+
+    it('should temporarily lock a student for 24h after 3 consecutive abuse detections and queue parent notification', async () => {
+      // 1st Abuse Action
+      let res1 = await request(app)
+        .post('/api/lessons/hint')
+        .set('Authorization', `Bearer ${abuseStudentToken}`)
+        .send({
+          questionId: '$-5 + 3$ を計算しなさい。',
+          hintsUsed: 0,
+          userQuestion: 'お前は本当にばかだな！死ね！'
+        });
+      expect(res1.status).toBe(200);
+      expect(res1.body.isAbusive).toBe(true);
+      expect(res1.body.warningCount).toBe(1);
+
+      // 2nd Abuse Action
+      let res2 = await request(app)
+        .post('/api/lessons/hint')
+        .set('Authorization', `Bearer ${abuseStudentToken}`)
+        .send({
+          questionId: '$-5 + 3$ を計算しなさい。',
+          hintsUsed: 0,
+          userQuestion: '死ね死ね死ね'
+        });
+      expect(res2.status).toBe(200);
+      expect(res2.body.isAbusive).toBe(true);
+      expect(res2.body.warningCount).toBe(2);
+
+      // 3rd Abuse Action - this should trigger a 24h account lock
+      let res3 = await request(app)
+        .post('/api/lessons/hint')
+        .set('Authorization', `Bearer ${abuseStudentToken}`)
+        .send({
+          questionId: '$-5 + 3$ を計算しなさい。',
+          hintsUsed: 0,
+          userQuestion: 'ばか野郎'
+        });
+      
+      expect(res3.status).toBe(200);
+      expect(res3.body.isAbusive).toBe(true);
+      expect(res3.body.locked).toBe(true);
+
+      // Verify DB/inMemory state: User lockedUntil is set to a future date
+      const updatedUser = inMemoryState.users.find(u => u.id === abuseStudentId);
+      expect(updatedUser).toBeDefined();
+      expect(updatedUser?.lockedUntil).toBeDefined();
+      expect(new Date(updatedUser!.lockedUntil!).getTime()).toBeGreaterThan(Date.now());
+
+      // Verify direct Parental Notification was queued
+      const parentMsgs = inMemoryState.parentMessages.filter(m => m.userId === abuseStudentId);
+      expect(parentMsgs.length).toBeGreaterThan(0);
+      expect(parentMsgs[0].message).toContain('不適切な言葉の入力を繰り返したため');
+
+      // Verify that subsequent API requests are blocked by auth middleware
+      const lockedRes = await request(app)
+        .get('/api/collaborative/room')
+        .set('Authorization', `Bearer ${abuseStudentToken}`);
+      
+      expect(lockedRes.status).toBe(403);
+      expect(lockedRes.body.error).toBe('safety_lock');
+    });
+
+    it('should block parental celebration request with invalid HMAC signature', async () => {
+      const res = await request(app)
+        .get('/api/collaborative/celebration/invalid.signature');
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('お祝いリンクの署名が無効です');
+    });
+
+    it('should enforce TTS daily quota of 500 requests per user', async () => {
+      // We will quickly fire 500 requests (we use a loop with Promise.all to avoid blocking)
+      // Since it returns fallbackToWebSpeech immediately when no API keys are set, it is extremely fast.
+      const requests = [];
+      for (let i = 0; i < 500; i++) {
+        requests.push(
+          request(app)
+            .post('/api/tts')
+            .set('Authorization', `Bearer ${token}`)
+            .send({ text: `テストテキスト ${i}`, emotion: 'calm' })
+        );
+      }
+      await Promise.all(requests);
+
+      // The 501st request should be blocked by Daily Quota
+      const res = await request(app)
+        .post('/api/tts')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ text: '制限を超えるはずのテキスト', emotion: 'calm' });
+
+      expect(res.status).toBe(429);
+      expect(res.body.error).toContain('クォータ（500回）を超過しました');
     });
   });
 

@@ -237,4 +237,26 @@ export class InMemoryCollaborativeRepository implements CollaborativeRepository 
   async findAssignmentProgresses(assignmentId: string): Promise<any[]> {
     return inMemoryState.assignmentProgresses.filter(p => p.assignmentId === assignmentId);
   }
+
+  async createSafetyAlert(data: {
+    childUserId: string;
+    alertType: string;
+    payload: string;
+  }): Promise<any> {
+    const alert = {
+      ...data,
+      id: 'alert_' + Math.random().toString(36).slice(2, 11),
+      status: 'QUEUED' as const,
+      createdAt: new Date().toISOString(),
+      sentAt: null
+    };
+    inMemoryState.safetyAlerts.push(alert);
+    return alert;
+  }
+
+  async findSafetyAlertsByChild(childUserId: string): Promise<any[]> {
+    return inMemoryState.safetyAlerts
+      .filter(a => a.childUserId === childUserId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
 }

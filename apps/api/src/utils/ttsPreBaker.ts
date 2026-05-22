@@ -38,7 +38,7 @@ export async function preBakeTTS(): Promise<void> {
         continue; // Already cached
       }
 
-      const ttsUrl = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`;
+      const ttsUrl = 'https://texttospeech.googleapis.com/v1/text:synthesize';
       let speakingRate = 1.0;
       let pitch = 0.0;
       if (phrase.emotion === 'excited') {
@@ -53,6 +53,7 @@ export async function preBakeTTS(): Promise<void> {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'X-Goog-Api-Key': apiKey,
         },
         body: JSON.stringify({
           input: { text: cleanText },

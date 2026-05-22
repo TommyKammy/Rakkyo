@@ -192,4 +192,26 @@ export class PrismaCollaborativeRepository implements CollaborativeRepository {
       where: { assignmentId }
     });
   }
+
+  async createSafetyAlert(data: {
+    childUserId: string;
+    alertType: string;
+    payload: string;
+  }): Promise<any> {
+    return (prisma as any).safetyAlert.create({
+      data: {
+        childUserId: data.childUserId,
+        alertType: data.alertType,
+        payload: data.payload,
+        status: 'QUEUED'
+      }
+    });
+  }
+
+  async findSafetyAlertsByChild(childUserId: string): Promise<any[]> {
+    return (prisma as any).safetyAlert.findMany({
+      where: { childUserId },
+      orderBy: { createdAt: 'desc' }
+    });
+  }
 }

@@ -50,6 +50,9 @@ model User {
   parentalConsent  Boolean                     @default(false)
   aiHintCountToday Int                         @default(0)
   lastAiHintDate   String?
+  abuseCount       Int                         @default(0)
+  abuseLastAt      DateTime?
+  lockedUntil      DateTime?
   createdAt        DateTime                    @default(now())
   updatedAt        DateTime                    @updatedAt
   attempts         Attempt[]
@@ -69,6 +72,9 @@ model User {
   receivedStamps      PeerStamp[]              @relation("ReceivedStamps")
   hiramekiTips        HiramekiTip[]
   childCelebrations   ParentalCelebration[]    @relation("ChildCelebrations")
+
+  // Phase-15.5
+  childSafetyAlerts   SafetyAlert[]            @relation("ChildSafetyAlerts")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -195,7 +201,7 @@ model Question {
 model Attempt {
   id              String   @id @default(uuid())
   userId          String
-  user            User     @relation(fields: [userId], references: [id])
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   questionId      String
   question        Question @relation(fields: [questionId], references: [id])
   isCorrect       Boolean
@@ -221,7 +227,7 @@ model Badge {
 
 model UserBadge {
   userId   String
-  user     User     @relation(fields: [userId], references: [id])
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   badgeId  String
   badge    Badge    @relation(fields: [badgeId], references: [id])
   earnedAt DateTime @default(now())
@@ -232,7 +238,7 @@ model UserBadge {
 model ParentMessage {
   id        String   @id @default(uuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   message   String
   isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
@@ -294,4 +300,21 @@ model ParentalCelebration {
   updatedAt     DateTime @updatedAt
 
   @@index([childId])
+}
+
+// Notification queue picked up by an out-of-band worker (email / LINE / push).
+// The worker is intentionally out of scope for Phase 15.5 — rows are written
+// here so the work can be reliably picked up later without losing alerts.
+model SafetyAlert {
+  id          String   @id @default(uuid())
+  childUserId String
+  child       User     @relation("ChildSafetyAlerts", fields: [childUserId], references: [id], onDelete: Cascade)
+  alertType   String   // "ABUSE_HARD_LOCK" など
+  payload     String   // JSON-stringified context (sourceRoute, lockedUntil, etc.)
+  status      String   @default("QUEUED") // QUEUED | SENT | FAILED
+  createdAt   DateTime @default(now())
+  sentAt      DateTime?
+
+  @@index([childUserId])
+  @@index([status])
 }
