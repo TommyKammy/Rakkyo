@@ -411,6 +411,7 @@ model Avatar {
   rejectionReason String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+  approvalAudits  AvatarApprovalAudit[]
 
   @@index([userId])
 }
@@ -432,6 +433,7 @@ model AvatarGenerationQuota {
 model AvatarApprovalAudit {
   id            String   @id @default(uuid())
   avatarId      String
+  avatar        Avatar   @relation(fields: [avatarId], references: [id], onDelete: Cascade)
   moderatorId   String   // Teacher or Parent User ID
   action        String   // "APPROVE" | "REJECT"
   imageHash     String   // Integrational verification hash
