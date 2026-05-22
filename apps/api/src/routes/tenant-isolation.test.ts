@@ -1,6 +1,6 @@
 import request from 'supertest';
 import app from '../app';
-import { mockDb } from '../mockDb';
+import { inMemoryState } from '../repositories/inmemory/state';
 import jwt from 'jsonwebtoken';
 
 const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'rakkyo-super-secret-key-12345';
@@ -9,7 +9,7 @@ describe('Multi-Tenant Isolation & Teacher Protection', () => {
   // Clear and prepare test environment in mockDb
   beforeAll(() => {
     // Seed test tenants
-    mockDb.tenants.push(
+    inMemoryState.tenants.push(
       {
         id: 'tenant-shibuya',
         name: '渋谷校',
@@ -27,7 +27,7 @@ describe('Multi-Tenant Isolation & Teacher Protection', () => {
     );
 
     // Seed classes for both tenants
-    mockDb.classes.push(
+    inMemoryState.classes.push(
       {
         id: 'class-shibuya-math',
         tenantId: 'tenant-shibuya',
@@ -122,29 +122,49 @@ describe('Multi-Tenant Isolation & Teacher Protection', () => {
     let shinjukuTeacherToken: string;
 
     beforeAll(() => {
-      // Seed teachers in mockDb
-      const tShibuya = mockDb.createUser({
+      // Seed teachers in inMemoryState
+      const tShibuya = {
+        id: 't_shibuya_' + Math.random().toString(36).substr(2, 9),
         tenantId: 'tenant-shibuya',
         email: 'teacher-shibuya@example.com',
         passwordHash: 'dummy',
         nickname: '渋谷先生',
         role: 'TEACHER',
         schoolYear: 1,
+        currentXp: 0,
+        level: 1,
+        streakCount: 0,
+        lastActiveDate: null,
         parentalConsent: false,
-      });
+        aiHintCountToday: 0,
+        lastAiHintDate: null,
+        badges: [],
+        createdAt: new Date().toISOString(),
+      };
+      inMemoryState.users.push(tShibuya);
 
-      const tShinjuku = mockDb.createUser({
+      const tShinjuku = {
+        id: 't_shinjuku_' + Math.random().toString(36).substr(2, 9),
         tenantId: 'tenant-shinjuku',
         email: 'teacher-shinjuku@example.com',
         passwordHash: 'dummy',
         nickname: '新宿先生',
         role: 'TEACHER',
         schoolYear: 1,
+        currentXp: 0,
+        level: 1,
+        streakCount: 0,
+        lastActiveDate: null,
         parentalConsent: false,
-      });
+        aiHintCountToday: 0,
+        lastAiHintDate: null,
+        badges: [],
+        createdAt: new Date().toISOString(),
+      };
+      inMemoryState.users.push(tShinjuku);
 
       // Enroll Shibuya teacher in Shibuya class
-      mockDb.classEnrollments.push({
+      inMemoryState.classEnrollments.push({
         id: 'enroll-t-shibuya',
         classId: 'class-shibuya-math',
         userId: tShibuya.id,
@@ -152,7 +172,7 @@ describe('Multi-Tenant Isolation & Teacher Protection', () => {
       });
 
       // Enroll Shinjuku teacher in Shinjuku class
-      mockDb.classEnrollments.push({
+      inMemoryState.classEnrollments.push({
         id: 'enroll-t-shinjuku',
         classId: 'class-shinjuku-math',
         userId: tShinjuku.id,

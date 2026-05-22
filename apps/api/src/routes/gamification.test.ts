@@ -1,6 +1,6 @@
 import request from 'supertest';
 import app from '../app';
-import { mockDb } from '../mockDb';
+import { inMemoryState } from '../repositories/inmemory/state';
 
 describe('Gamification Integration Tests', () => {
   const testPassword = 'password123';
@@ -117,10 +117,11 @@ describe('Gamification Integration Tests', () => {
     const { token, userId } = await createTestUserToken('streak_demon');
 
     // Manually force mock database user's streak to 6, so that the next submission bumps it to 7.
-    mockDb.updateUser(userId, {
-      streakCount: 6,
-      lastActiveDate: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() // yesterday
-    });
+    const user = inMemoryState.users.find(u => u.id === userId);
+    if (user) {
+      user.streakCount = 6;
+      user.lastActiveDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(); // yesterday
+    }
 
     const res = await request(app)
       .post('/api/lessons/submit')

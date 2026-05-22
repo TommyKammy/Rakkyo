@@ -1,9 +1,8 @@
-import { Router } from 'express';
+import { Router, Request } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import prisma from '../db';
-import { mockDb } from '../mockDb';
+import { AuthenticatedRequest } from '../middlewares/auth';
 
 const router = Router();
 const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'rakkyo-super-secret-key-12345';
@@ -25,106 +24,47 @@ const loginSchema = z.object({
 });
 
 // Register
-router.post('/register', async (req, res, next) => {
+router.post('/register', async (req: Request, res, next) => {
   try {
-    const parsed = registerSchema.parse(req.body);
+    const authReq = req as AuthenticatedRequest;
+    const parsed = registerSchema.parse(authReq.body);
     const passwordHash = bcrypt.hashSync(parsed.password, 10);
 
-    let user;
-    let isMock = false;
+    const targetCode = (parsed.tenantCode || 'b2c').trim().toLowerCase();
+    let tenant = await authReq.repos!.users.findTenantByCode(targetCode);
 
-    try {
-      if (process.env.NODE_ENV === 'test') {
-        throw new Error('Test environment: Forcing Mock DB');
-      }
-
-      const targetCode = (parsed.tenantCode || 'b2c').trim().toLowerCase();
-      let tenant = await prisma.tenant.findUnique({
-        where: { code: targetCode }
-      });
-
-      if (!tenant) {
-        if (targetCode === 'b2c') {
-          tenant = await prisma.tenant.upsert({
-            where: { code: 'b2c' },
-            update: {},
-            create: {
-              id: 'default-b2c',
-              name: 'デフォルト個人テナント',
-              code: 'b2c'
-            }
-          });
-        } else {
-          res.status(400).json({ error: '指定された塾・学校コードが存在しません。管理者に確認してね 🧅' });
-          return;
-        }
-      }
-
-      const tenantId = tenant.id;
-
-      const existingUser = await prisma.user.findUnique({
-        where: {
-          tenantId_email: {
-            tenantId,
-            email: parsed.email
-          }
-        }
-      });
-
-      if (existingUser) {
-        res.status(400).json({ error: 'このメールアドレスは既に登録されています。' });
+    if (!tenant) {
+      if (targetCode === 'b2c') {
+        tenant = await authReq.repos!.users.createTenant({
+          id: 'default-b2c',
+          name: 'デフォルト個人テナント',
+          code: 'b2c',
+          plan: 'FREE'
+        });
+      } else {
+        res.status(400).json({ error: '指定された塾・学校コードが存在しません。管理者に確認してね 🧅' });
         return;
       }
-
-      user = await prisma.user.create({
-        data: {
-          tenantId,
-          email: parsed.email,
-          password: passwordHash,
-          nickname: parsed.nickname,
-          role: parsed.role,
-          schoolYear: parsed.schoolYear,
-          parentalConsent: parsed.parentalConsent
-        }
-      });
-    } catch (dbError) {
-      console.warn('⚠️ Database connection failed. Falling back to Mock DB.');
-      isMock = true;
-
-      const targetCode = (parsed.tenantCode || 'b2c').trim().toLowerCase();
-      let tenant = mockDb.findTenantByCode(targetCode);
-
-      if (!tenant) {
-        if (targetCode === 'b2c') {
-          tenant = mockDb.findTenantById('default-b2c');
-          if (!tenant) {
-            tenant = mockDb.createTenant('デフォルト個人テナント', 'b2c');
-            tenant.id = 'default-b2c';
-          }
-        } else {
-          res.status(400).json({ error: '指定された塾・学校コードが存在しません。管理者に確認してね 🧅' });
-          return;
-        }
-      }
-
-      const tenantId = tenant.id;
-
-      const existingUser = mockDb.findUserByEmail(parsed.email, tenantId);
-      if (existingUser) {
-        res.status(400).json({ error: 'このメールアドレスは既に登録されています。(Mock)' });
-        return;
-      }
-
-      user = mockDb.createUser({
-        tenantId,
-        email: parsed.email,
-        passwordHash,
-        nickname: parsed.nickname,
-        role: parsed.role,
-        schoolYear: parsed.schoolYear,
-        parentalConsent: parsed.parentalConsent
-      });
     }
+
+    const tenantId = tenant.id;
+
+    const existingUser = await authReq.repos!.users.findByEmail(parsed.email);
+    if (existingUser && existingUser.tenantId === tenantId) {
+      res.status(400).json({ error: 'このメールアドレスは既に登録されています。' });
+      return;
+    }
+
+    const user = await authReq.repos!.users.createUser({
+      id: 'user_' + Math.random().toString(36).substr(2, 9),
+      tenantId,
+      email: parsed.email,
+      passwordHash,
+      nickname: parsed.nickname,
+      role: parsed.role,
+      schoolYear: parsed.schoolYear,
+      parentalConsent: parsed.parentalConsent
+    });
 
     const token = jwt.sign(
       { 
@@ -145,11 +85,11 @@ router.post('/register', async (req, res, next) => {
         email: user.email,
         nickname: user.nickname,
         schoolYear: user.schoolYear,
-        parentalConsent: 'parentalConsent' in user ? user.parentalConsent : false,
-        currentXp: 'currentXp' in user ? user.currentXp : 0,
-        level: 'level' in user ? user.level : 1,
-        streakCount: 'streakCount' in user ? user.streakCount : 0,
-        isMock
+        parentalConsent: user.parentalConsent,
+        currentXp: user.currentXp,
+        level: user.level,
+        streakCount: user.streakCount,
+        isMock: !!authReq.isMock
       }
     });
   } catch (error) {
@@ -157,78 +97,41 @@ router.post('/register', async (req, res, next) => {
       res.status(400).json({ error: error.errors });
       return;
     }
+    console.error('Register error:', error);
     res.status(500).json({ error: 'サーバーエラーが発生しました。' });
   }
 });
 
 // Login
-router.post('/login', async (req, res, next) => {
+router.post('/login', async (req: Request, res, next) => {
   try {
-    const parsed = loginSchema.parse(req.body);
-
-    let user = null;
-    let isMock = false;
+    const authReq = req as AuthenticatedRequest;
+    const parsed = loginSchema.parse(authReq.body);
     const targetCode = (parsed.tenantCode || 'b2c').trim().toLowerCase();
 
-    try {
-      if (process.env.NODE_ENV === 'test') {
-        throw new Error('Test environment: Forcing Mock DB');
-      }
+    let tenant = await authReq.repos!.users.findTenantByCode(targetCode);
 
-      let tenant = await prisma.tenant.findUnique({
-        where: { code: targetCode }
-      });
-
-      if (!tenant) {
-        if (targetCode === 'b2c') {
-          tenant = await prisma.tenant.upsert({
-            where: { code: 'b2c' },
-            update: {},
-            create: {
-              id: 'default-b2c',
-              name: 'デフォルト個人テナント',
-              code: 'b2c'
-            }
-          });
-        } else {
-          res.status(401).json({ error: '塾・学校コードが正しくありません。' });
-          return;
-        }
-      }
-
-      user = await prisma.user.findUnique({
-        where: {
-          tenantId_email: {
-            tenantId: tenant.id,
-            email: parsed.email
-          }
-        }
-      });
-    } catch (dbError) {
-      console.warn('⚠️ Database connection failed. Falling back to Mock DB.');
-      isMock = true;
-
-      let tenant = mockDb.findTenantByCode(targetCode);
-      if (!tenant) {
-        if (targetCode === 'b2c') {
-          tenant = mockDb.findTenantById('default-b2c');
-        } else {
-          res.status(401).json({ error: '塾・学校コードが正しくありません。' });
-          return;
-        }
-      }
-
-      if (tenant) {
-        user = mockDb.findUserByEmail(parsed.email, tenant.id);
+    if (!tenant) {
+      if (targetCode === 'b2c') {
+        tenant = await authReq.repos!.users.createTenant({
+          id: 'default-b2c',
+          name: 'デフォルト個人テナント',
+          code: 'b2c',
+          plan: 'FREE'
+        });
+      } else {
+        res.status(401).json({ error: '塾・学校コードが正しくありません。' });
+        return;
       }
     }
 
-    if (!user) {
+    const user = await authReq.repos!.users.findByEmail(parsed.email);
+    if (!user || user.tenantId !== tenant.id) {
       res.status(401).json({ error: 'メールアドレスまたはパスワードが正しくありません。' });
       return;
     }
 
-    const passwordHash = 'password' in user ? user.password : user.passwordHash;
+    const passwordHash = user.password;
     const isPasswordValid = bcrypt.compareSync(parsed.password, passwordHash);
 
     if (!isPasswordValid) {
@@ -255,11 +158,11 @@ router.post('/login', async (req, res, next) => {
         email: user.email,
         nickname: user.nickname,
         schoolYear: user.schoolYear,
-        parentalConsent: 'parentalConsent' in user ? user.parentalConsent : false,
-        currentXp: 'currentXp' in user ? user.currentXp : 0,
-        level: 'level' in user ? user.level : 1,
-        streakCount: 'streakCount' in user ? user.streakCount : 0,
-        isMock
+        parentalConsent: user.parentalConsent,
+        currentXp: user.currentXp,
+        level: user.level,
+        streakCount: user.streakCount,
+        isMock: !!authReq.isMock
       }
     });
   } catch (error) {
@@ -267,6 +170,7 @@ router.post('/login', async (req, res, next) => {
       res.status(400).json({ error: error.errors });
       return;
     }
+    console.error('Login error:', error);
     res.status(500).json({ error: 'サーバーエラーが発生しました。' });
   }
 });

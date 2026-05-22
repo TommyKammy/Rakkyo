@@ -1,6 +1,4 @@
 import { Router, Response } from 'express';
-import prisma from '../db';
-import { mockDb } from '../mockDb';
 import { authMiddleware, AuthenticatedRequest } from '../middlewares/auth';
 import { calculateParentStats } from '../services/parentStatsService';
 
@@ -9,25 +7,13 @@ const router = Router();
 router.get('/stats', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const isMock = req.isMock;
+    const repos = req.repos!;
     
-    let attempts: any[] = [];
+    // Get attempts from repository and sort ascending as the original logic did
+    const attempts = await repos.attempts.findAttemptsByUser(userId);
+    const sortedAttempts = [...attempts].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     
-    if (!isMock) {
-      try {
-        attempts = await prisma.attempt.findMany({
-          where: { userId },
-          orderBy: { createdAt: 'asc' }
-        });
-      } catch (dbError) {
-        console.warn('⚠️ Parent stats DB query failed. Falling back to mockDb.');
-        attempts = mockDb.getUserAttempts(userId);
-      }
-    } else {
-      attempts = mockDb.getUserAttempts(userId);
-    }
-    
-    const stats = calculateParentStats(attempts);
+    const stats = calculateParentStats(sortedAttempts);
     res.json(stats);
     
   } catch (error) {
@@ -40,29 +26,13 @@ router.get('/stats', authMiddleware, async (req: AuthenticatedRequest, res: Resp
 router.get('/message', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const isMock = req.isMock;
-    
-    let messages: any[] = [];
-    
-    if (!isMock) {
-      try {
-        messages = await prisma.parentMessage.findMany({
-          where: { userId },
-          orderBy: { createdAt: 'desc' },
-          take: 10
-        });
-      } catch (dbError) {
-        console.warn('⚠️ Parent messages DB query failed. Falling back to mockDb.');
-        messages = mockDb.getParentMessages(userId);
-      }
-    } else {
-      messages = mockDb.getParentMessages(userId);
-    }
+    const repos = req.repos!;
+    const messages = await repos.users.findParentMessages(userId);
     
     // Sort descending by date
-    messages.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const sortedMessages = [...messages].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     
-    res.json({ messages });
+    res.json({ messages: sortedMessages });
   } catch (err) {
     console.error('Error getting parent messages:', err);
     res.status(500).json({ error: 'メッセージの取得に失敗しました。' });
@@ -73,7 +43,7 @@ router.get('/message', authMiddleware, async (req: AuthenticatedRequest, res: Re
 router.post('/message', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const isMock = req.isMock;
+    const repos = req.repos!;
     const { message } = req.body;
     
     if (!message || typeof message !== 'string') {
@@ -81,24 +51,7 @@ router.post('/message', authMiddleware, async (req: AuthenticatedRequest, res: R
       return;
     }
     
-    let newMessage: any;
-    
-    if (!isMock) {
-      try {
-        newMessage = await prisma.parentMessage.create({
-          data: {
-            userId,
-            message,
-            isRead: false
-          }
-        });
-      } catch (dbError) {
-        console.warn('⚠️ Parent message DB creation failed. Falling back to mockDb.');
-        newMessage = mockDb.createParentMessage(userId, message);
-      }
-    } else {
-      newMessage = mockDb.createParentMessage(userId, message);
-    }
+    const newMessage = await repos.users.createParentMessage(userId, message);
     
     res.status(201).json({ message: newMessage });
   } catch (err) {
@@ -110,25 +63,9 @@ router.post('/message', authMiddleware, async (req: AuthenticatedRequest, res: R
 // PATCH /message/:id/read - Mark parent message as read
 router.patch('/message/:id/read', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const isMock = req.isMock;
     const { id } = req.params;
-    
-    let success = false;
-    
-    if (!isMock) {
-      try {
-        await prisma.parentMessage.update({
-          where: { id },
-          data: { isRead: true }
-        });
-        success = true;
-      } catch (dbError) {
-        console.warn('⚠️ Parent message DB update failed. Falling back to mockDb.');
-        success = mockDb.markParentMessageAsRead(id);
-      }
-    } else {
-      success = mockDb.markParentMessageAsRead(id);
-    }
+    const repos = req.repos!;
+    const success = await repos.users.markParentMessageAsRead(id);
     
     if (!success) {
       res.status(404).json({ error: '対象のメッセージが見つかりませんでした。' });

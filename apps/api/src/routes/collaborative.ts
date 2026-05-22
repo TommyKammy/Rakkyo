@@ -1,8 +1,6 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import crypto from 'crypto';
-import prisma from '../db';
-import { mockDb } from '../mockDb';
 import { authMiddleware, AuthenticatedRequest } from '../middlewares/auth';
 import { SafetyFilter } from '@rakkyo/ai-tutor';
 
@@ -31,90 +29,68 @@ const respondSchema = z.object({
 router.get('/room', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const isMock = req.isMock || process.env.NODE_ENV === 'test';
+    const repos = req.repos!;
 
     // Find classId of the student
     let classId = 'test-class-id';
     let className = '中1数学特訓クラス';
     let grade = 1;
 
-    if (!isMock) {
-      const enrollment = await prisma.classEnrollment.findFirst({
-        where: { userId, role: 'STUDENT' },
-        include: { class: true }
-      });
-      if (enrollment) {
-        classId = enrollment.classId;
-        className = enrollment.class.name;
-        grade = enrollment.class.grade;
-      }
-    } else {
-      const enrollment = mockDb.classEnrollments.find(e => e.userId === userId && e.role === 'STUDENT');
-      if (enrollment) {
-        const cls = mockDb.classes.find(c => c.id === enrollment.classId);
-        if (cls) {
-          classId = cls.id;
-          className = cls.name;
-          grade = cls.grade;
+    const enrollment = await repos.users.findEnrollment(userId, 'STUDENT');
+    if (enrollment) {
+      classId = enrollment.classId;
+      className = enrollment.class.name;
+      grade = enrollment.class.grade;
+    }
+
+    // Generate actual active room members based on real activity (Grit)
+    const enrolls = await repos.users.findEnrollmentsByClass(classId, 'STUDENT');
+    const classmates = enrolls.filter(e => e.userId !== userId);
+
+    const avatars = ['🧅', '🥕', '🥦', '🌽', '🍅', '🧄'];
+    const activeMembers = [];
+
+    for (let idx = 0; idx < classmates.length; idx++) {
+      const e = classmates[idx];
+      const c = e.user;
+      const avatar = avatars[idx % avatars.length];
+      const lastActive = c.lastActiveDate ? new Date(c.lastActiveDate).toISOString() : null;
+      const isOnline = lastActive ? (Date.now() - new Date(lastActive).getTime() < 30 * 60 * 1000) : false;
+
+      // Fetch actual attempts for the classmate
+      const attempts = await repos.attempts.findAttemptsByUser(c.id, 10);
+      const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const recentAttempts = attempts.filter(a => new Date(a.createdAt).getTime() >= sevenDaysAgo);
+
+      let status = '今日はこれからかな？🧅';
+      let bubbleMessage = '今日はまだ来ていないみたい。みんなで一緒にがんばろう！🧅';
+
+      if (recentAttempts.length > 0) {
+        // Use the most recent attempt
+        const latestAttempt = recentAttempts[0];
+        const lessonName = latestAttempt.question?.lesson?.name || latestAttempt.question?.lessonId || 'レッスン';
+        
+        if (latestAttempt.isCorrect) {
+          status = `「${lessonName}」をクリアしたよ！`;
+          bubbleMessage = `「${lessonName}」をみごとクリアしたよ！🎉`;
+        } else if (latestAttempt.hintsUsed > 0) {
+          status = `「${lessonName}」に挑戦中！💪`;
+          bubbleMessage = `「${lessonName}」でヒントも使いながらあきらめずにがんばっているよ！💪`;
+        } else {
+          status = `「${lessonName}」を考え中...🤔`;
+          bubbleMessage = `「${lessonName}」をじっくり考え中...🤔`;
         }
       }
-    }
 
-    // Generate simulated active room members
-    // We get real classmates who were active recently, and mix with cute simulation states
-    let classmates: { id: string; nickname: string; lastActive: string | null }[] = [];
-
-    if (!isMock) {
-      const enrolls = await prisma.classEnrollment.findMany({
-        where: { classId, role: 'STUDENT', NOT: { userId } },
-        include: { user: true }
-      });
-      classmates = enrolls.map(e => ({
-        id: e.user.id,
-        nickname: e.user.nickname,
-        lastActive: e.user.lastActiveDate ? e.user.lastActiveDate.toISOString() : null
-      }));
-    } else {
-      const enrolls = mockDb.classEnrollments.filter(e => e.classId === classId && e.role === 'STUDENT' && e.userId !== userId);
-      classmates = enrolls.map(e => {
-        const u = mockDb.findUserById(e.userId);
-        return {
-          id: e.userId,
-          nickname: u ? u.nickname : 'クラスメイト',
-          lastActive: u ? u.lastActiveDate : null
-        };
-      });
-    }
-
-    // Add playful active states & avatar
-    const avatars = ['🧅', '🥕', '🥦', '🌽', '🍅', '🧄'];
-    const simulatedActivities = [
-      { status: '方程式に挑戦中！', action: 'を解いているよ！' },
-      { status: 'ヒントをみてひらめいた！✨', action: 'でひらめきを得たよ！' },
-      { status: 'にがて克服ミッションに挑戦中！💪', action: 'をがんばっているよ！' },
-      { status: 'じっくり考え中...🤔', action: 'を考えているよ！' },
-      { status: 'レッスンクリア！大はしゃぎ中！🎉', action: 'をクリアしたよ！' }
-    ];
-
-    const lessonsList = [
-      '正の数と負の数', '文字を使った式', '等式と不等式', '方程式の解き方',
-      'be動詞のつかいかた', '一般動詞の会話', '植物の体のつくり', '光と音の性質'
-    ];
-
-    const activeMembers = classmates.map((c, idx) => {
-      const avatar = avatars[idx % avatars.length];
-      const activity = simulatedActivities[(idx + 3) % simulatedActivities.length];
-      const lesson = lessonsList[(idx + 2) % lessonsList.length];
-      
-      return {
+      activeMembers.push({
         id: c.id,
         nickname: c.nickname,
         avatar,
-        status: activity.status,
-        bubbleMessage: `今、隣で「${lesson}」${activity.action}`,
-        isOnline: c.lastActive ? (Date.now() - new Date(c.lastActive).getTime() < 30 * 60 * 1000) : false
-      };
-    });
+        status,
+        bubbleMessage,
+        isOnline
+      });
+    }
 
     res.json({
       classId,
@@ -130,50 +106,27 @@ router.get('/room', authMiddleware, async (req: AuthenticatedRequest, res: Respo
 router.get('/stamps', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const isMock = req.isMock || process.env.NODE_ENV === 'test';
+    const repos = req.repos!;
 
-    if (!isMock) {
-      const received = await prisma.peerStamp.findMany({
-        where: { receiverId: userId },
-        include: { sender: true },
-        orderBy: { createdAt: 'desc' }
-      });
-      const sent = await prisma.peerStamp.findMany({
-        where: { senderId: userId },
-        include: { receiver: true },
-        orderBy: { createdAt: 'desc' }
-      });
+    const received = await repos.collaborative.findPeerStampsReceived(userId);
+    const sent = await repos.collaborative.findPeerStampsSent(userId);
 
-      res.json({
-        received: received.map(s => ({
-          id: s.id,
-          senderId: s.senderId,
-          senderNickname: s.sender.nickname,
-          stampType: s.stampType,
-          createdAt: s.createdAt.toISOString()
-        })),
-        sent: sent.map(s => ({
-          id: s.id,
-          receiverId: s.receiverId,
-          receiverNickname: s.receiver.nickname,
-          stampType: s.stampType,
-          createdAt: s.createdAt.toISOString()
-        }))
-      });
-    } else {
-      const received = mockDb.getUserReceivedStamps(userId);
-      const sent = mockDb.peerStamps
-        .filter(s => s.senderId === userId)
-        .map(s => {
-          const rec = mockDb.findUserById(s.receiverId);
-          return {
-            ...s,
-            receiverNickname: rec ? rec.nickname : 'ともだち'
-          };
-        });
-
-      res.json({ received, sent });
-    }
+    res.json({
+      received: received.map((s: any) => ({
+        id: s.id,
+        senderId: s.senderId,
+        senderNickname: s.sender.nickname,
+        stampType: s.stampType,
+        createdAt: new Date(s.createdAt).toISOString()
+      })),
+      sent: sent.map((s: any) => ({
+        id: s.id,
+        receiverId: s.receiverId,
+        receiverNickname: s.receiver.nickname,
+        stampType: s.stampType,
+        createdAt: new Date(s.createdAt).toISOString()
+      }))
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -183,51 +136,37 @@ router.get('/stamps', authMiddleware, async (req: AuthenticatedRequest, res: Res
 router.post('/stamps', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const isMock = req.isMock || process.env.NODE_ENV === 'test';
+    const repos = req.repos!;
     const { receiverId, stampType } = stampSchema.parse(req.body);
 
     if (userId === receiverId) {
       return res.status(400).json({ error: '自分自身にスタンプを送ることはできません' });
     }
 
-    if (!isMock) {
-      const newStamp = await prisma.peerStamp.create({
-        data: {
-          senderId: userId,
-          receiverId,
-          stampType
-        },
-        include: { receiver: true }
-      });
-      
-      // Create message notification for recipient
-      const sender = await prisma.user.findUnique({ where: { id: userId } });
-      await prisma.parentMessage.create({
-        data: {
-          userId: receiverId,
-          message: `お友達の ${sender?.nickname || '誰か'} から「${stampType}」スタンプが届きました！🧅`,
-          isRead: false
-        }
-      });
+    const sender = await repos.users.findById(userId);
 
-      res.json({
-        success: true,
-        stamp: {
-          id: newStamp.id,
-          senderId: newStamp.senderId,
-          receiverId: newStamp.receiverId,
-          stampType: newStamp.stampType,
-          createdAt: newStamp.createdAt.toISOString()
-        }
-      });
-    } else {
-      const stamp = mockDb.createPeerStamp(userId, receiverId, stampType);
-      const sender = mockDb.findUserById(userId);
-      // Create message notification for recipient
-      mockDb.createParentMessage(receiverId, `お友達の ${sender?.nickname || '誰か'} から「${stampType}」スタンプが届きました！🧅`);
+    const newStamp = await repos.collaborative.createPeerStamp({
+      senderId: userId,
+      receiverId,
+      stampType
+    });
+    
+    // Create message notification for recipient
+    await repos.collaborative.createParentMessage(
+      receiverId,
+      `お友達の ${sender?.nickname || '誰か'} から「${stampType}」スタンプが届きました！🧅`
+    );
 
-      res.json({ success: true, stamp });
-    }
+    res.json({
+      success: true,
+      stamp: {
+        id: newStamp.id,
+        senderId: newStamp.senderId,
+        receiverId: newStamp.receiverId,
+        stampType: newStamp.stampType,
+        createdAt: new Date(newStamp.createdAt).toISOString()
+      }
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -237,33 +176,16 @@ router.post('/stamps', authMiddleware, async (req: AuthenticatedRequest, res: Re
 router.get('/missions', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const isMock = req.isMock || process.env.NODE_ENV === 'test';
-
+    const repos = req.repos!;
     let classId = 'test-class-id';
-    if (!isMock) {
-      const enrollment = await prisma.classEnrollment.findFirst({
-        where: { userId, role: 'STUDENT' }
-      });
-      if (enrollment) {
-        classId = enrollment.classId;
-      }
-    } else {
-      const enrollment = mockDb.classEnrollments.find(e => e.userId === userId && e.role === 'STUDENT');
-      if (enrollment) {
-        classId = enrollment.classId;
-      }
+    
+    const enrollment = await repos.users.findEnrollment(userId, 'STUDENT');
+    if (enrollment) {
+      classId = enrollment.classId;
     }
 
-    if (!isMock) {
-      const missions = await prisma.classMission.findMany({
-        where: { classId },
-        orderBy: { createdAt: 'desc' }
-      });
-      res.json(missions);
-    } else {
-      const missions = mockDb.getClassMissions(classId);
-      res.json(missions);
-    }
+    const missions = await repos.collaborative.findClassMissions(classId);
+    res.json(missions);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -273,41 +195,17 @@ router.get('/missions', authMiddleware, async (req: AuthenticatedRequest, res: R
 router.post('/missions/contribute', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const isMock = req.isMock || process.env.NODE_ENV === 'test';
+    const repos = req.repos!;
     const { minutes } = contributeSchema.parse(req.body);
 
     let classId = 'test-class-id';
-    if (!isMock) {
-      const enrollment = await prisma.classEnrollment.findFirst({
-        where: { userId, role: 'STUDENT' }
-      });
-      if (enrollment) {
-        classId = enrollment.classId;
-      }
-    } else {
-      const enrollment = mockDb.classEnrollments.find(e => e.userId === userId && e.role === 'STUDENT');
-      if (enrollment) {
-        classId = enrollment.classId;
-      }
+    const enrollment = await repos.users.findEnrollment(userId, 'STUDENT');
+    if (enrollment) {
+      classId = enrollment.classId;
     }
 
-    if (!isMock) {
-      const missions = await prisma.classMission.findMany({ where: { classId } });
-      if (missions.length > 0) {
-        await prisma.classMission.updateMany({
-          where: { classId },
-          data: {
-            currentMinutes: {
-              increment: minutes
-            }
-          }
-        });
-      }
-      res.json({ success: true, contributed: minutes });
-    } else {
-      const success = mockDb.contributeToClassMission(classId, minutes);
-      res.json({ success, contributed: minutes });
-    }
+    await repos.collaborative.incrementClassMissionMinutes(classId, minutes);
+    res.json({ success: true, contributed: minutes });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -317,33 +215,16 @@ router.post('/missions/contribute', authMiddleware, async (req: AuthenticatedReq
 router.get('/hirameki', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const isMock = req.isMock || process.env.NODE_ENV === 'test';
-
+    const repos = req.repos!;
     let classId = 'test-class-id';
-    if (!isMock) {
-      const enrollment = await prisma.classEnrollment.findFirst({
-        where: { userId, role: 'STUDENT' }
-      });
-      if (enrollment) {
-        classId = enrollment.classId;
-      }
-    } else {
-      const enrollment = mockDb.classEnrollments.find(e => e.userId === userId && e.role === 'STUDENT');
-      if (enrollment) {
-        classId = enrollment.classId;
-      }
+
+    const enrollment = await repos.users.findEnrollment(userId, 'STUDENT');
+    if (enrollment) {
+      classId = enrollment.classId;
     }
 
-    if (!isMock) {
-      const tips = await prisma.hiramekiTip.findMany({
-        where: { classId, isSafe: true },
-        orderBy: { createdAt: 'desc' }
-      });
-      res.json(tips);
-    } else {
-      const tips = mockDb.getClassHiramekiTips(classId);
-      res.json(tips);
-    }
+    const tips = await repos.collaborative.findHiramekiTips(classId);
+    res.json(tips);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -353,22 +234,13 @@ router.get('/hirameki', authMiddleware, async (req: AuthenticatedRequest, res: R
 router.post('/hirameki', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const isMock = req.isMock || process.env.NODE_ENV === 'test';
+    const repos = req.repos!;
     const { content } = hiramekiSchema.parse(req.body);
 
     let classId = 'test-class-id';
-    if (!isMock) {
-      const enrollment = await prisma.classEnrollment.findFirst({
-        where: { userId, role: 'STUDENT' }
-      });
-      if (enrollment) {
-        classId = enrollment.classId;
-      }
-    } else {
-      const enrollment = mockDb.classEnrollments.find(e => e.userId === userId && e.role === 'STUDENT');
-      if (enrollment) {
-        classId = enrollment.classId;
-      }
+    const enrollment = await repos.users.findEnrollment(userId, 'STUDENT');
+    if (enrollment) {
+      classId = enrollment.classId;
     }
 
     // Safety Filter Check!
@@ -380,25 +252,23 @@ router.post('/hirameki', authMiddleware, async (req: AuthenticatedRequest, res: 
       });
     }
 
-    // Assign a cute random nickname
+    // Assign a cute random nickname with a unique user suffix to prevent abuse/impersonation
     const nicknames = ['がんばるオニオン', 'ひらめきラッキョ', 'あきらめないネギ', 'スラスラにんにく', 'にこにこキャベツ'];
-    const nickname = nicknames[Math.floor(Math.random() * nicknames.length)];
+    const baseNickname = nicknames[Math.floor(Math.random() * nicknames.length)];
+    
+    // Generate unique 4-digit suffix from user ID SHA-256
+    const hash = crypto.createHash('sha256').update(userId).digest('hex');
+    const code = (parseInt(hash.substring(0, 8), 16) % 9000) + 1000;
+    const nickname = `${baseNickname}#${code}`;
 
-    if (!isMock) {
-      const tip = await prisma.hiramekiTip.create({
-        data: {
-          classId,
-          userId,
-          nickname,
-          content,
-          isSafe: true
-        }
-      });
-      res.json({ success: true, tip });
-    } else {
-      const tip = mockDb.createHiramekiTip(classId, userId, nickname, content, true);
-      res.json({ success: true, tip });
-    }
+    const tip = await repos.collaborative.createHiramekiTip({
+      classId,
+      userId,
+      nickname,
+      content,
+      isSafe: true
+    });
+    res.json({ success: true, tip });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -408,115 +278,78 @@ router.post('/hirameki', authMiddleware, async (req: AuthenticatedRequest, res: 
 router.post('/celebration/trigger', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const childId = req.userId!;
-    const isMock = req.isMock || process.env.NODE_ENV === 'test';
+    const repos = req.repos!;
     const { attemptId } = z.object({ attemptId: z.string() }).parse(req.body);
 
     const token = 'celeb_' + crypto.randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // 14 days expiration
 
-    if (!isMock) {
-      const celeb = await prisma.parentalCelebration.create({
-        data: {
-          childId,
-          attemptId,
-          token,
-          isResponded: false,
-          expiresAt
-        }
-      });
-      res.json({ success: true, token, celebrationId: celeb.id });
-    } else {
-      const celeb = mockDb.createParentalCelebration(childId, attemptId, token);
-      res.json({ success: true, token, celebrationId: celeb.id });
-    }
+    const celeb = await repos.collaborative.createParentalCelebration({
+      childId,
+      attemptId,
+      token,
+      isResponded: false,
+      expiresAt
+    });
+    res.json({ success: true, token, celebrationId: celeb.id });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
 });
 
 // 9. GET /celebration/:token - Get parental celebration details for shared link
-router.get('/celebration/:token', async (req, res) => {
+router.get('/celebration/:token', async (req: AuthenticatedRequest, res) => {
   try {
     const { token } = req.params;
-    const isMock = token.startsWith('celeb_mock') || process.env.NODE_ENV === 'test'; // Check for simulated test tokens
+    const repos = req.repos!;
 
-    if (!isMock) {
-      const celeb = await prisma.parentalCelebration.findUnique({
-        where: { token },
-        include: {
-          child: true,
-          attempt: {
-            include: {
-              question: true
-            }
-          }
-        }
-      });
+    const celeb = await repos.collaborative.findParentalCelebrationByToken(token);
 
-      if (!celeb) {
-        return res.status(404).json({ error: 'お祝いリンクが見つかりませんでした' });
-      }
-
-      if (new Date(celeb.expiresAt).getTime() < Date.now()) {
-        return res.status(400).json({ error: 'お祝いリンクの有効期限が切れています' });
-      }
-
-      res.json({
-        childNickname: celeb.child.nickname,
-        attempt: {
-          questionPrompt: celeb.attempt.question.prompt,
-          isCorrect: celeb.attempt.isCorrect,
-          hintsUsed: celeb.attempt.hintsUsed,
-          durationSeconds: celeb.attempt.durationSeconds,
-          errorType: celeb.attempt.errorType,
-          aiDiagnosis: celeb.attempt.aiDiagnosis,
-          createdAt: celeb.attempt.createdAt.toISOString()
-        },
-        parentStamp: celeb.parentStamp,
-        parentComment: celeb.parentComment,
-        isResponded: celeb.isResponded
-      });
-    } else {
-      let celeb = mockDb.findParentalCelebrationByToken(token);
-      if (!celeb) {
-        // Dynamic seed in mock for test ease
-        celeb = mockDb.createParentalCelebration('test-student-id', 'attempt_seed_4', token);
-      }
-
-      if (new Date(celeb.expiresAt).getTime() < Date.now()) {
-        return res.status(400).json({ error: 'お祝いリンクの有効期限が切れています' });
-      }
-
-      const child = mockDb.findUserById(celeb.childId);
-      const attempt = mockDb.attempts.find(a => a.id === celeb.attemptId)!;
-
-      res.json({
-        childNickname: child ? child.nickname : 'ラッキョくん',
-        attempt: {
-          questionPrompt: attempt ? attempt.questionId : '$12 \\div (-4)$ を計算しなさい。',
-          isCorrect: attempt ? attempt.isCorrect : false,
-          hintsUsed: attempt ? attempt.hintsUsed : 3,
-          durationSeconds: attempt ? attempt.durationSeconds : 52,
-          errorType: attempt ? attempt.errorType : 'conceptual_error',
-          aiDiagnosis: attempt ? attempt.aiDiagnosis : 'わり算の符号のルールを間違えちゃったみたいだね！マイナスが1つのときはマイナスになるよ！ 🧅',
-          createdAt: attempt ? attempt.createdAt : new Date().toISOString()
-        },
-        parentStamp: celeb.parentStamp,
-        parentComment: celeb.parentComment,
-        isResponded: celeb.isResponded
-      });
+    if (!celeb) {
+      return res.status(404).json({ error: 'お祝いリンクが見つかりませんでした' });
     }
+
+    if (new Date(celeb.expiresAt).getTime() < Date.now()) {
+      return res.status(400).json({ error: 'お祝いリンクの有効期限が切れています' });
+    }
+
+    const childNickname = celeb.child ? celeb.child.nickname : 'ともだち';
+    
+    // Attempt data extraction, handling cases where relation details might not be present (like mock state in tests)
+    const prompt = celeb.attempt?.question?.prompt || celeb.attempt?.questionId || '$12 \\div (-4)$ を計算しなさい。';
+    const isCorrect = celeb.attempt ? celeb.attempt.isCorrect : false;
+    const hintsUsed = celeb.attempt ? celeb.attempt.hintsUsed : 0;
+    const durationSeconds = celeb.attempt ? celeb.attempt.durationSeconds : null;
+    const errorType = celeb.attempt ? celeb.attempt.errorType : null;
+    const aiDiagnosis = celeb.attempt ? celeb.attempt.aiDiagnosis : null;
+    const createdAt = celeb.attempt ? new Date(celeb.attempt.createdAt).toISOString() : new Date().toISOString();
+
+    res.json({
+      childNickname,
+      attempt: {
+        questionPrompt: prompt,
+        isCorrect,
+        hintsUsed,
+        durationSeconds,
+        errorType,
+        aiDiagnosis,
+        createdAt
+      },
+      parentStamp: celeb.parentStamp,
+      parentComment: celeb.parentComment,
+      isResponded: celeb.isResponded
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
 });
 
 // 10. POST /celebration/:token/respond - Parent sends congrats back
-router.post('/celebration/:token/respond', async (req, res) => {
+router.post('/celebration/:token/respond', async (req: AuthenticatedRequest, res) => {
   try {
     const { token } = req.params;
+    const repos = req.repos!;
     const { stamp, comment } = respondSchema.parse(req.body);
-    const isMock = token.startsWith('celeb_mock') || process.env.NODE_ENV === 'test';
 
     // Safety Filter Check on Parent Comment
     if (comment) {
@@ -529,47 +362,28 @@ router.post('/celebration/:token/respond', async (req, res) => {
       }
     }
 
-    if (!isMock) {
-      const celeb = await prisma.parentalCelebration.findUnique({ where: { token } });
-      if (!celeb) {
-        return res.status(404).json({ error: 'お祝いリンクが見つかりませんでした' });
-      }
-
-      if (celeb.isResponded || new Date(celeb.expiresAt).getTime() < Date.now()) {
-        return res.status(400).json({ error: 'お祝いリンクの有効期限が切れているか、すでに応答済みです' });
-      }
-
-      await prisma.parentalCelebration.update({
-        where: { token },
-        data: {
-          parentStamp: stamp,
-          parentComment: comment || null,
-          isResponded: true
-        }
-      });
-
-      // Also create a direct ParentMessage notification for the child
-      await prisma.parentMessage.create({
-        data: {
-          userId: celeb.childId,
-          message: `保護者からスタンプ「${stamp}」とメッセージ「${comment || 'がんばったね！'}」が届きました！`,
-          isRead: false
-        }
-      });
-
-      res.json({ success: true });
-    } else {
-      const celeb = mockDb.findParentalCelebrationByToken(token);
-      if (celeb && (celeb.isResponded || new Date(celeb.expiresAt).getTime() < Date.now())) {
-        return res.status(400).json({ error: 'お祝いリンクの有効期限が切れているか、すでに応答済みです' });
-      }
-
-      const success = mockDb.respondToParentalCelebration(token, stamp, comment);
-      if (!success) {
-        return res.status(404).json({ error: 'お祝いリンクが見つかりませんでした' });
-      }
-      res.json({ success: true });
+    const celeb = await repos.collaborative.findParentalCelebrationByToken(token);
+    if (!celeb) {
+      return res.status(404).json({ error: 'お祝いリンクが見つかりませんでした' });
     }
+
+    if (celeb.isResponded || new Date(celeb.expiresAt).getTime() < Date.now()) {
+      return res.status(400).json({ error: 'お祝いリンクの有効期限が切れているか、すでに応答済みです' });
+    }
+
+    await repos.collaborative.updateParentalCelebration(token, {
+      parentStamp: stamp,
+      parentComment: comment || null,
+      isResponded: true
+    });
+
+    // Also create a direct ParentMessage notification for the child
+    await repos.collaborative.createParentMessage(
+      celeb.childId,
+      `保護者からスタンプ「${stamp}」とメッセージ「${comment || 'がんばったね！'}」が届きました！`
+    );
+
+    res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

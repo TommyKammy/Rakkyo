@@ -1,7 +1,7 @@
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import app from './app';
-import { mockDb } from './mockDb';
+import { inMemoryState } from './repositories/inmemory/state';
 
 const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'rakkyo-super-secret-key-12345';
 
@@ -86,8 +86,8 @@ describe('Phase-11 Hyper-Personalized AI & Recommendations Integration Tests', (
       expect(res.body).toHaveProperty('explanation');
       expect(res.body).toHaveProperty('isDynamic', true);
       
-      // Checking that it's stored in mockDb's dynamic questions registry
-      const storedQ = mockDb.findDynamicQuestion(res.body.id);
+      // Checking that it's stored in inMemoryState's dynamic questions registry
+      const storedQ = inMemoryState.dynamicQuestions.find(q => q.id === res.body.id);
       expect(storedQ).toBeDefined();
       expect(storedQ?.isDynamic).toBe(true);
     });

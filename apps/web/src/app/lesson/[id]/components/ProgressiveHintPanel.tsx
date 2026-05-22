@@ -15,7 +15,7 @@ interface ProgressiveHintPanelProps {
   aiHints: { [key: number]: string };
   currentQuestion: any;
   isPlayingTts: string | null;
-  speakText: (text: string, id: string) => void;
+  speakText: (text: string, id: string, emotion?: string) => void;
   isLoadingHint: boolean;
   subjectCode: string;
   mascotEmotion: 'normal' | 'correct' | 'incorrect' | 'happy';
@@ -28,6 +28,8 @@ interface ProgressiveHintPanelProps {
   startListening: () => void;
   stopListening: () => void;
   submitVoiceQuestion: () => void;
+  isSocraticPreferred: boolean;
+  setIsSocraticPreferred: (pref: boolean) => void;
 }
 
 export function ProgressiveHintPanel({
@@ -53,6 +55,8 @@ export function ProgressiveHintPanel({
   startListening,
   stopListening,
   submitVoiceQuestion,
+  isSocraticPreferred,
+  setIsSocraticPreferred,
 }: ProgressiveHintPanelProps) {
   if (!showHintPanel) {
     return (
@@ -83,6 +87,30 @@ export function ProgressiveHintPanel({
           className="text-xs text-slate-400 font-bold hover:text-slate-600 cursor-pointer"
         >
           とじる
+        </button>
+      </div>
+
+      {/* Socratic Mode Toggle (いっしょに考えるモード) */}
+      <div className="flex items-center justify-between bg-pastel-purple/10 border border-pastel-purple-border/30 px-3.5 py-2.5 rounded-2xl select-none">
+        <div className="flex flex-col">
+          <span className="text-2xs font-extrabold text-pastel-purple-dark flex items-center gap-1">
+            🧅 いっしょに考えるモード
+          </span>
+          <span className="text-4xs text-slate-400 font-bold mt-0.5">
+            答えを直接言わずに、少しずつ問いかけながら対話するよ！
+          </span>
+        </div>
+        <button
+          onClick={() => setIsSocraticPreferred(!isSocraticPreferred)}
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none cursor-pointer ${
+            isSocraticPreferred ? "bg-pastel-purple-dark" : "bg-slate-300"
+          }`}
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+              isSocraticPreferred ? "translate-x-4.5" : "translate-x-1"
+            }`}
+          />
         </button>
       </div>
 

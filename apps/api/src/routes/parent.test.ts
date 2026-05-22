@@ -1,6 +1,6 @@
 import request from 'supertest';
 import app from '../app';
-import { mockDb } from '../mockDb';
+import { inMemoryState } from '../repositories/inmemory/state';
 
 describe('Parent Router /api/parent', () => {
   let token: string;
@@ -33,7 +33,7 @@ describe('Parent Router /api/parent', () => {
       return d.toISOString();
     };
 
-    mockDb.attempts.push(
+    inMemoryState.attempts.push(
       // 4 days ago - Unit 1: Positive and negative numbers
       {
         id: `t_attempt_${userId}_1`,

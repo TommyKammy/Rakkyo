@@ -191,6 +191,8 @@ function ExerciseScreenContent() {
   const [showFinalAnswer, setShowFinalAnswer] = useState(false);
   const [aiHints, setAiHints] = useState<{ [key: number]: string }>({});
   const [isLoadingHint, setIsLoadingHint] = useState(false);
+  const [isSocraticPreferred, setIsSocraticPreferred] = useState(false);
+  const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
 
   // Text-to-Speech (TTS) Voice Synthesis
   const [isPlayingTts, setIsPlayingTts] = useState<string | null>(null);
@@ -292,16 +294,25 @@ function ExerciseScreenContent() {
     };
   }, [subjectCode]);
 
-  const speakText = (text: string, id: string) => {
-    if (typeof window === "undefined" || !window.speechSynthesis) return;
+  // Refactored speakText for Hybrid Cloud TTS + Local Web Speech Fallback
+  const speakText = async (text: string, id: string, emotion: string = "neutral") => {
+    if (typeof window === "undefined") return;
+
+    // Stop currently playing audio or speech
+    if (currentAudio) {
+      currentAudio.pause();
+      setCurrentAudio(null);
+    }
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
 
     if (isPlayingTts === id) {
-      window.speechSynthesis.cancel();
       setIsPlayingTts(null);
       return;
     }
 
-    window.speechSynthesis.cancel();
+    setIsPlayingTts(id);
 
     // Clean text from LaTeX segments to make TTS flow nicely
     let cleanText = text;
@@ -312,7 +323,7 @@ function ExerciseScreenContent() {
         .replace(/”/g, "」")
         .replace(/"/g, "「")
         .replace(/’/g, "'")
-        .replace(/\[\s*\]/g, " ほにゃらら ") // Convert empty brackets into kid-friendly "honyarara"
+        .replace(/\[\s*\]/g, " ほにゃらら ")
         .replace(/\[/g, " ")
         .replace(/\]/g, " ");
     } else {
@@ -326,54 +337,91 @@ function ExerciseScreenContent() {
         .replace(/-/g, "マイナス");
     }
 
-    // Language misdetection guard: prefix with a Japanese full-width space.
-    // This forces browser engine heuristics to recognize the string context as Japanese (ja-JP)
-    // rather than falling back to en-US defaults when it encounters alphabetical fragments.
-    cleanText = "　" + cleanText;
+    // Language misdetection guard for local Web Speech fallbacks
+    const localText = "　" + cleanText;
 
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.lang = "ja-JP"; // Speak in Japanese across all subjects (including English) as requested by the user
-    utterance.rate = 0.92; // Optimized rate: warm, slow enough for comprehension, but natural rhythm
+    // Helper to play local SpeechSynthesis
+    const playLocalSpeech = () => {
+      if (!window.speechSynthesis) {
+        setIsPlayingTts(null);
+        return;
+      }
+      const utterance = new SpeechSynthesisUtterance(localText);
+      utterance.lang = "ja-JP";
+      utterance.rate = 0.92;
 
-    // Explicitly bind localized voices, prioritizing modern high-quality neural voices.
-    // Try both cache state and direct synchronous fetch to ensure it works on the very first user interaction.
-    let availableVoices = voices.length > 0 ? voices : window.speechSynthesis.getVoices();
-    if (!availableVoices || availableVoices.length === 0) {
-      // Force instant query synchronous update
-      availableVoices = window.speechSynthesis.getVoices() || [];
-    }
+      let availableVoices = voices.length > 0 ? voices : window.speechSynthesis.getVoices();
+      if (!availableVoices || availableVoices.length === 0) {
+        availableVoices = window.speechSynthesis.getVoices() || [];
+      }
 
-    if (availableVoices.length > 0) {
-      const jaVoices = availableVoices.filter(v => {
-        const langLower = v.lang.toLowerCase().replace("_", "-");
-        return langLower === "ja-jp" || langLower.startsWith("ja");
-      });
+      if (availableVoices.length > 0) {
+        const jaVoices = availableVoices.filter(v => {
+          const langLower = v.lang.toLowerCase().replace("_", "-");
+          return langLower === "ja-jp" || langLower.startsWith("ja");
+        });
 
-      if (jaVoices.length > 0) {
-        // Prioritize: Siri neural voices (macOS/iOS) > Google voices (Chrome) > Premium/Enhanced voices > default fallback
-        const jaVoice = jaVoices.find(v => v.name.toLowerCase().includes("siri"))
-          || jaVoices.find(v => v.name.toLowerCase().includes("google"))
-          || jaVoices.find(v => v.name.toLowerCase().includes("enhanced"))
-          || jaVoices.find(v => v.name.toLowerCase().includes("premium"))
-          || jaVoices[0];
+        if (jaVoices.length > 0) {
+          const jaVoice = jaVoices.find(v => v.name.toLowerCase().includes("siri"))
+            || jaVoices.find(v => v.name.toLowerCase().includes("google"))
+            || jaVoices.find(v => v.name.toLowerCase().includes("enhanced"))
+            || jaVoices.find(v => v.name.toLowerCase().includes("premium"))
+            || jaVoices[0];
 
-        if (jaVoice) {
-          utterance.voice = jaVoice;
-          utterance.lang = jaVoice.lang; // Align utterance lang precisely with voice lang
+          if (jaVoice) {
+            utterance.voice = jaVoice;
+            utterance.lang = jaVoice.lang;
+          }
         }
       }
+
+      utterance.onend = () => {
+        setIsPlayingTts(null);
+      };
+      utterance.onerror = () => {
+        setIsPlayingTts(null);
+      };
+
+      window.speechSynthesis.speak(utterance);
+    };
+
+    // 1. Try Hybrid Cloud TTS REST endpoint
+    try {
+      const response = await fetch("http://localhost:4000/api/tts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ text: cleanText, emotion })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.url) {
+          const audioUrl = `http://localhost:4000${data.url}`;
+          const audio = new Audio(audioUrl);
+          setCurrentAudio(audio);
+          
+          audio.onended = () => {
+            setIsPlayingTts(null);
+            setCurrentAudio(null);
+          };
+          audio.onerror = () => {
+            console.warn("Cloud TTS playback error, falling back to Web Speech Synthesis.");
+            playLocalSpeech();
+          };
+          audio.play();
+        } else {
+          // FallbackToWebSpeech indicates server-side fallback instructions
+          playLocalSpeech();
+        }
+      } else {
+        playLocalSpeech();
+      }
+    } catch (e) {
+      console.warn("Cloud TTS API unreachable, falling back to Web Speech Synthesis.", e);
+      playLocalSpeech();
     }
-
-    utterance.onend = () => {
-      setIsPlayingTts(null);
-    };
-
-    utterance.onerror = () => {
-      setIsPlayingTts(null);
-    };
-
-    setIsPlayingTts(id);
-    window.speechSynthesis.speak(utterance);
   };
 
   const startListening = () => {
@@ -418,7 +466,8 @@ function ExerciseScreenContent() {
         body: JSON.stringify({
           questionId: q.id || q.prompt,
           hintsUsed: showHintPanel ? hintStage : 0,
-          userQuestion: userMsg
+          userQuestion: userMsg,
+          isSocraticPreferred
         })
       });
 
@@ -453,14 +502,20 @@ function ExerciseScreenContent() {
         },
         body: JSON.stringify({
           questionId: q.id || q.prompt,
-          hintsUsed: stageNum - 1
+          hintsUsed: stageNum - 1,
+          isSocraticPreferred
         })
       });
 
       if (response.ok) {
         const data = await response.json();
         setAiHints(prev => ({ ...prev, [stageNum]: data.hintText }));
-        speak(data.hintText, "neutral");
+        
+        if (data.metaDescription) {
+          speakText(`${data.metaDescription}。${data.hintText}`, `hint${stageNum}`, "calm");
+        } else {
+          speakText(data.hintText, `hint${stageNum}`, "neutral");
+        }
       }
     } catch (e) {
       console.warn("⚠️ Failed to fetch AI hint. Falling back to static curriculum hints.", e);
@@ -1008,6 +1063,8 @@ function ExerciseScreenContent() {
             startListening={startListening}
             stopListening={stopListening}
             submitVoiceQuestion={submitVoiceQuestion}
+            isSocraticPreferred={isSocraticPreferred}
+            setIsSocraticPreferred={setIsSocraticPreferred}
           />
         </div>
 
