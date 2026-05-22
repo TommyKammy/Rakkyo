@@ -69,4 +69,30 @@ describe('SafetyFilter', () => {
       });
     });
   });
+
+  describe('isAbusive', () => {
+    it('should detect abusive or offensive words', () => {
+      expect(SafetyFilter.isAbusive('死ねよお前')).toBe(true);
+      expect(SafetyFilter.isAbusive('バカにするな')).toBe(true);
+      expect(SafetyFilter.isAbusive('このうんこアプリ')).toBe(true);
+    });
+
+    it('should detect sexual or sensitive words', () => {
+      expect(SafetyFilter.isAbusive('エッチしよう')).toBe(true);
+      expect(SafetyFilter.isAbusive('セックス')).toBe(true);
+    });
+
+    it('should detect non-educational study bypass attempts', () => {
+      expect(SafetyFilter.isAbusive('ゲームしよう')).toBe(true);
+      expect(SafetyFilter.isAbusive('あそぼうぜ')).toBe(true);
+      expect(SafetyFilter.isAbusive('宿題やって')).toBe(true);
+      expect(SafetyFilter.isAbusive('答えを教えてください')).toBe(true);
+    });
+
+    it('should pass normal study queries', () => {
+      expect(SafetyFilter.isAbusive('この問題の解き方を教えて！')).toBe(false);
+      expect(SafetyFilter.isAbusive('マイナスの計算のコツは？')).toBe(false);
+      expect(SafetyFilter.isAbusive('絶対値について説明して')).toBe(false);
+    });
+  });
 });

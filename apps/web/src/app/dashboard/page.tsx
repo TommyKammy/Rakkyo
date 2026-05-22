@@ -15,11 +15,47 @@ interface UserProfile {
   isMock?: boolean;
 }
 
+interface ParentMessage {
+  id: string;
+  message: string;
+  isRead: boolean;
+  createdAt: string;
+}
+
 export default function StudentDashboard() {
   const router = useRouter();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [mascotMessage, setMascotMessage] = useState("");
   const [reviews, setReviews] = useState<any[]>([]);
+  const [parentMessages, setParentMessages] = useState<ParentMessage[]>([]);
+  const [latestUnreadMessage, setLatestUnreadMessage] = useState<ParentMessage | null>(null);
+  const [showConfetti, setShowConfetti] = useState(false);
+
+  const fetchParentMessages = async (token: string) => {
+    try {
+      const response = await fetch("http://localhost:4000/api/parent/message", {
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const msgs = data.messages || [];
+        setParentMessages(msgs);
+        const unread = msgs.find((m: any) => !m.isRead);
+        setLatestUnreadMessage(unread || null);
+      }
+    } catch (e) {
+      console.warn("⚠️ Failed to fetch parent messages. Trying localStorage mock...");
+      const localMsgs = localStorage.getItem("rakkyo_parent_msgs");
+      if (localMsgs) {
+        const msgs = JSON.parse(localMsgs);
+        setParentMessages(msgs);
+        const unread = msgs.find((m: any) => !m.isRead);
+        setLatestUnreadMessage(unread || null);
+      }
+    }
+  };
 
   const fetchReviews = async (token: string, userId: string) => {
     try {
@@ -63,6 +99,7 @@ export default function StudentDashboard() {
       setUser(parsedUser);
       
       fetchReviews(token, parsedUser.id);
+      fetchParentMessages(token);
 
       // Mascot dynamic messages based on current states
       const messages = [
@@ -83,6 +120,41 @@ export default function StudentDashboard() {
     localStorage.removeItem("rakkyo_token");
     localStorage.removeItem("rakkyo_user");
     router.push("/");
+  };
+
+  const handleReadMessage = async (msgId: string) => {
+    const token = localStorage.getItem("rakkyo_token");
+    setShowConfetti(true);
+    
+    try {
+      if (token) {
+        const response = await fetch(`http://localhost:4000/api/parent/message/${msgId}/read`, {
+          method: "PATCH",
+          headers: {
+            "Authorization": `Bearer ${token}`
+          }
+        });
+        if (response.ok) {
+          setLatestUnreadMessage(null);
+          setParentMessages(prev => prev.map(m => m.id === msgId ? { ...m, isRead: true } : m));
+        }
+      } else {
+        const localMsgs = localStorage.getItem("rakkyo_parent_msgs");
+        if (localMsgs) {
+          const msgs = JSON.parse(localMsgs);
+          const updated = msgs.map((m: any) => m.id === msgId ? { ...m, isRead: true } : m);
+          localStorage.setItem("rakkyo_parent_msgs", JSON.stringify(updated));
+          setParentMessages(updated);
+        }
+        setLatestUnreadMessage(null);
+      }
+    } catch (e) {
+      console.error("Failed to read message", e);
+    }
+    
+    setTimeout(() => {
+      setShowConfetti(false);
+    }, 4000);
   };
 
   if (!user) {
@@ -154,10 +226,13 @@ export default function StudentDashboard() {
       </header>
 
       {/* 2. Welcome Mascot Bubble Section */}
-      <section className="bg-white border-3 border-slate-100 rounded-3xl p-6 bubbly-shadow flex flex-col md:flex-row items-center gap-6">
+      <section className={`bg-white border-3 rounded-3xl p-6 bubbly-shadow flex flex-col md:flex-row items-center gap-6 transition-all duration-300 ${latestUnreadMessage ? "border-pastel-pink-border" : "border-slate-100"}`}>
         
         {/* Animated Mascot */}
-        <div className="w-28 h-28 flex-shrink-0 animate-bounce-gentle select-none">
+        <div className="w-28 h-28 flex-shrink-0 animate-bounce-gentle select-none relative">
+          {latestUnreadMessage && (
+            <span className="absolute -top-2 -right-2 text-2xl animate-bounce">✉️</span>
+          )}
           <svg viewBox="0 0 100 100" className="w-full h-full">
             {/* Scallion Body */}
             <path
@@ -204,13 +279,40 @@ export default function StudentDashboard() {
         </div>
 
         {/* Talk Bubble */}
-        <div className="flex-1 space-y-4">
-          <div className="bg-pastel-blue border-2 border-pastel-blue-border rounded-2xl p-4 relative">
-            <div className="absolute left-[50%] md:left-[-8px] top-[-8px] md:top-[50%] transform -translate-x-[50%] md:translate-x-0 md:-translate-y-[50%] w-0 h-0 border-b-8 border-b-pastel-blue-border md:border-b-transparent border-l-8 border-l-transparent md:border-r-8 md:border-r-pastel-blue-border border-r-8 border-r-transparent md:border-l-transparent" />
-            <p className="text-sm sm:text-base font-bold text-slate-700 tracking-wide leading-relaxed">
-              {mascotMessage}
-            </p>
-          </div>
+        <div className="flex-1 space-y-4 w-full">
+          {latestUnreadMessage ? (
+            <div className="bg-pastel-pink border-2 border-pastel-pink-border rounded-3xl p-5 relative shadow-sm animate-fade-in w-full">
+              <div className="absolute left-[50%] md:left-[-8px] top-[-8px] md:top-[50%] transform -translate-x-[50%] md:translate-x-0 md:-translate-y-[50%] w-0 h-0 border-b-8 border-b-pastel-pink-border md:border-b-transparent border-l-8 border-l-transparent md:border-r-8 md:border-r-pastel-pink-border border-r-8 border-r-transparent md:border-l-transparent" />
+              
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-sm">🧅</span>
+                <span className="text-xs font-black text-pastel-pink-dark uppercase tracking-wider">
+                  おうちのひとから ぽかぽかメッセージが とどいているよ！
+                </span>
+              </div>
+              
+              <p className="text-sm sm:text-base font-extrabold text-slate-800 tracking-wide leading-relaxed bg-white/70 border border-pastel-pink-border/40 p-4 rounded-2xl">
+                「 {latestUnreadMessage.message} 」
+              </p>
+
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => handleReadMessage(latestUnreadMessage.id)}
+                  className="px-6 py-2.5 bg-pastel-pink-dark hover:bg-rose-600 border-2 border-rose-700 text-white font-extrabold rounded-2xl text-xs flex items-center gap-1.5 active:translate-y-[2px] transition-all bubbly-shadow cursor-pointer animate-bounce"
+                >
+                  <span>よんだよ！ 👍</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-pastel-blue border-2 border-pastel-blue-border rounded-2xl p-4 relative">
+              <div className="absolute left-[50%] md:left-[-8px] top-[-8px] md:top-[50%] transform -translate-x-[50%] md:translate-x-0 md:-translate-y-[50%] w-0 h-0 border-b-8 border-b-pastel-blue-border md:border-b-transparent border-l-8 border-l-transparent md:border-r-8 md:border-r-pastel-blue-border border-r-8 border-r-transparent md:border-l-transparent" />
+              <p className="text-sm sm:text-base font-bold text-slate-700 tracking-wide leading-relaxed">
+                {mascotMessage}
+              </p>
+            </div>
+          )}
 
           {/* XP Progress Bar */}
           <div className="space-y-1.5 px-1">
@@ -493,6 +595,56 @@ export default function StudentDashboard() {
           </div>
 
         </div>
+      {/* Confetti Overlay */}
+      {showConfetti && (
+        <div className="fixed inset-0 pointer-events-none z-[9999] overflow-hidden">
+          {Array.from({ length: 60 }).map((_, i) => {
+            const left = Math.random() * 100;
+            const delay = Math.random() * 3;
+            const duration = 2 + Math.random() * 2;
+            const size = 6 + Math.random() * 12;
+            const colors = ["#F43F5E", "#3B82F6", "#10B981", "#EAB308", "#A855F7", "#EC4899", "#F97316"];
+            const color = colors[Math.floor(Math.random() * colors.length)];
+            const rotate = Math.random() * 360;
+            
+            return (
+              <div
+                key={i}
+                className="absolute top-[-5%] rounded-sm opacity-90 animate-fall"
+                style={{
+                  left: `${left}%`,
+                  width: `${size}px`,
+                  height: `${size}px`,
+                  backgroundColor: color,
+                  transform: `rotate(${rotate}deg)`,
+                  animationDelay: `${delay}s`,
+                  animationDuration: `${duration}s`,
+                }}
+              />
+            );
+          })}
+          <style dangerouslySetInnerHTML={{__html: `
+            @keyframes fall {
+              0% {
+                top: -5%;
+                transform: translateX(0) rotate(0deg);
+              }
+              50% {
+                transform: translateX(50px) rotate(180deg);
+              }
+              100% {
+                top: 105%;
+                transform: translateX(-50px) rotate(360deg);
+              }
+            }
+            .animate-fall {
+              animation-name: fall;
+              animation-timing-function: linear;
+              animation-iteration-count: infinite;
+            }
+          `}} />
+        </div>
+      )}
       </main>
     </div>
   );

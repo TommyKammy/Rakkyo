@@ -13,7 +13,8 @@ describe('Auth Router /api/auth', () => {
         email: testEmail,
         password: testPassword,
         nickname: testNickname,
-        schoolYear: 1
+        schoolYear: 1,
+        parentalConsent: true
       });
 
     expect(res.status).toBe(201);
@@ -30,7 +31,8 @@ describe('Auth Router /api/auth', () => {
         email: testEmail,
         password: testPassword,
         nickname: testNickname,
-        schoolYear: 1
+        schoolYear: 1,
+        parentalConsent: true
       });
 
     expect(res.status).toBe(400);

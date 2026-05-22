@@ -8,6 +8,9 @@ export interface UserMock {
   level: number;
   streakCount: number;
   lastActiveDate: string | null;
+  parentalConsent: boolean;
+  aiHintCountToday: number;
+  lastAiHintDate: string | null;
   badges: string[];
   createdAt: string;
 }
@@ -23,9 +26,18 @@ export interface AttemptMock {
   createdAt: string;
 }
 
+export interface ParentMessageMock {
+  id: string;
+  userId: string;
+  message: string;
+  isRead: boolean;
+  createdAt: string;
+}
+
 class MockDatabase {
   users: UserMock[] = [];
   attempts: AttemptMock[] = [];
+  parentMessages: ParentMessageMock[] = [];
 
   constructor() {
     // Seed a default test student
@@ -39,6 +51,9 @@ class MockDatabase {
       level: 2,
       streakCount: 3,
       lastActiveDate: new Date().toISOString(),
+      parentalConsent: true,
+      aiHintCountToday: 0,
+      lastAiHintDate: null,
       badges: ['🎉 冒険のはじまり'],
       createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(), // Created 5 days ago
     });
@@ -171,7 +186,7 @@ class MockDatabase {
     return this.users.find(u => u.id === id);
   }
 
-  createUser(user: Omit<UserMock, 'id' | 'createdAt' | 'currentXp' | 'level' | 'streakCount' | 'lastActiveDate' | 'badges'>): UserMock {
+  createUser(user: Omit<UserMock, 'id' | 'createdAt' | 'currentXp' | 'level' | 'streakCount' | 'lastActiveDate' | 'badges' | 'aiHintCountToday' | 'lastAiHintDate'>): UserMock {
     const newUser: UserMock = {
       ...user,
       id: 'user_' + Math.random().toString(36).substr(2, 9),
@@ -179,6 +194,8 @@ class MockDatabase {
       level: 1,
       streakCount: 0,
       lastActiveDate: null,
+      aiHintCountToday: 0,
+      lastAiHintDate: null,
       badges: [],
       createdAt: new Date().toISOString(),
     };
@@ -206,6 +223,31 @@ class MockDatabase {
 
   getUserAttempts(userId: string): AttemptMock[] {
     return this.attempts.filter(a => a.userId === userId);
+  }
+
+  getParentMessages(userId: string): ParentMessageMock[] {
+    return this.parentMessages.filter(m => m.userId === userId);
+  }
+
+  createParentMessage(userId: string, message: string): ParentMessageMock {
+    const newMessage: ParentMessageMock = {
+      id: 'msg_' + Math.random().toString(36).substr(2, 9),
+      userId,
+      message,
+      isRead: false,
+      createdAt: new Date().toISOString()
+    };
+    this.parentMessages.push(newMessage);
+    return newMessage;
+  }
+
+  markParentMessageAsRead(id: string): boolean {
+    const msg = this.parentMessages.find(m => m.id === id);
+    if (msg) {
+      msg.isRead = true;
+      return true;
+    }
+    return false;
   }
 }
 

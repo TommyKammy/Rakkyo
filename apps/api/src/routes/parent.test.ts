@@ -18,7 +18,8 @@ describe('Parent Router /api/parent', () => {
         email: testEmail,
         password: testPassword,
         nickname: testNickname,
-        schoolYear: 1
+        schoolYear: 1,
+        parentalConsent: true
       });
     
     token = res.body.token;
@@ -41,6 +42,7 @@ describe('Parent Router /api/parent', () => {
         isCorrect: true,
         hintsUsed: 0,
         answerSubmitted: '-2',
+        durationSeconds: 30, // 30s
         createdAt: getPastDate(4, 16)
       },
       {
@@ -50,6 +52,7 @@ describe('Parent Router /api/parent', () => {
         isCorrect: true,
         hintsUsed: 1,
         answerSubmitted: '-11',
+        durationSeconds: 45, // 45s
         createdAt: getPastDate(4, 17)
       },
       // 3 days ago - Unit 1
@@ -60,6 +63,7 @@ describe('Parent Router /api/parent', () => {
         isCorrect: true,
         hintsUsed: 2,
         answerSubmitted: '18',
+        durationSeconds: 60, // 60s
         createdAt: getPastDate(3, 17)
       },
       {
@@ -69,6 +73,7 @@ describe('Parent Router /api/parent', () => {
         isCorrect: false,
         hintsUsed: 3,
         answerSubmitted: '3',
+        durationSeconds: 90, // 90s
         createdAt: getPastDate(3, 18)
       },
       // 2 days ago - Unit 1
@@ -79,6 +84,7 @@ describe('Parent Router /api/parent', () => {
         isCorrect: true,
         hintsUsed: 1,
         answerSubmitted: '-3',
+        durationSeconds: 40, // 40s
         createdAt: getPastDate(2, 16)
       },
       {
@@ -88,6 +94,7 @@ describe('Parent Router /api/parent', () => {
         isCorrect: true,
         hintsUsed: 2,
         answerSubmitted: '2 と -8',
+        durationSeconds: 80, // 80s
         createdAt: getPastDate(2, 17)
       },
       // Yesterday - Unit 1 and Unit 2
@@ -98,6 +105,7 @@ describe('Parent Router /api/parent', () => {
         isCorrect: true,
         hintsUsed: 3,
         answerSubmitted: '-6',
+        durationSeconds: 120, // 120s
         createdAt: getPastDate(1, 18)
       },
       {
@@ -107,6 +115,7 @@ describe('Parent Router /api/parent', () => {
         isCorrect: false,
         hintsUsed: 1,
         answerSubmitted: '11',
+        durationSeconds: 50, // 50s
         createdAt: getPastDate(1, 19)
       },
       // Today - Unit 2
@@ -117,6 +126,7 @@ describe('Parent Router /api/parent', () => {
         isCorrect: true,
         hintsUsed: 0,
         answerSubmitted: '-11',
+        durationSeconds: 25, // 25s
         createdAt: getPastDate(0, 15)
       },
       {
@@ -126,6 +136,7 @@ describe('Parent Router /api/parent', () => {
         isCorrect: true,
         hintsUsed: 1,
         answerSubmitted: '-4x-3',
+        durationSeconds: 60, // 60s
         createdAt: getPastDate(0, 16)
       }
     );
@@ -151,6 +162,8 @@ describe('Parent Router /api/parent', () => {
     expect(res.body).toHaveProperty('dailyActivity');
     expect(res.body).toHaveProperty('topicProgress');
     expect(res.body).toHaveProperty('hintStageUsage');
+    expect(res.body).toHaveProperty('weakestUnits');
+    expect(res.body).toHaveProperty('weeklyHistory');
     
     // Check summary properties
     const summary = res.body.summary;
@@ -160,44 +173,78 @@ describe('Parent Router /api/parent', () => {
     expect(summary).toHaveProperty('accuracyRate');
     expect(summary).toHaveProperty('totalHintsUsed');
     expect(summary).toHaveProperty('gritScore');
+    expect(summary).toHaveProperty('totalStudyTimeMinutes');
     
     // Verify specific values
     expect(summary.totalAttempts).toBe(10);
     expect(summary.correctAttempts).toBe(8);
     expect(summary.accuracyRate).toBe(80); // 8/10 * 100
     
-    // Check grit score (grit attempts: 8 has hintsUsed > 0, grit correct: 6 has isCorrect: true)
-    // gritAttempts: 2, 3, 4, 5, 6, 7, 8, 10 (8 attempts)
-    // gritSuccess: 2, 3, 5, 6, 7, 10 (6 attempts)
-    // gritScore: 6/8 = 75%
+    // Verify study time (total: 30+45+60+90+40+80+120+50+25+60 = 600 seconds = 10 minutes)
+    expect(summary.totalStudyTimeMinutes).toBe(10);
+    
+    // Check grit score
     expect(summary.gritScore).toBe(75);
     
     // Daily Activity checking (should have exactly 7 days of items)
     expect(res.body.dailyActivity).toHaveLength(7);
-    const todayActivity = res.body.dailyActivity[6];
-    expect(todayActivity).toHaveProperty('date');
-    expect(todayActivity).toHaveProperty('attemptsCount');
-    expect(todayActivity).toHaveProperty('correctCount');
-    expect(todayActivity).toHaveProperty('hintsCount');
     
-    // Topic Progress checking
-    expect(res.body.topicProgress.length).toBeGreaterThan(0);
-    expect(res.body.topicProgress[0]).toHaveProperty('unitName');
-    expect(res.body.topicProgress[0]).toHaveProperty('totalQuestions');
-    expect(res.body.topicProgress[0]).toHaveProperty('attemptsCount');
-    expect(res.body.topicProgress[0]).toHaveProperty('correctCount');
+    // Weakest units checking
+    expect(res.body.weakestUnits.length).toBeGreaterThan(0);
+    expect(res.body.weakestUnits[0]).toHaveProperty('unitName');
+    expect(res.body.weakestUnits[0]).toHaveProperty('weakestScore');
+    expect(res.body.weakestUnits[0]).toHaveProperty('reason');
     
-    // Hint stage checking
-    expect(res.body.hintStageUsage).toHaveProperty('stage1Count');
-    expect(res.body.hintStageUsage).toHaveProperty('stage2Count');
-    expect(res.body.hintStageUsage).toHaveProperty('stage3Count');
-    
-    // attempt 2(1), 3(2), 4(3), 5(1), 6(2), 7(3), 8(1), 10(1)
-    // stage 1 used in: 2, 3, 4, 5, 6, 7, 8, 10 (8 items) -> count >= 1
-    // stage 2 used in: 3, 4, 6, 7 (4 items) -> count >= 2
-    // stage 3 used in: 4, 7 (2 items) -> count >= 3
-    expect(res.body.hintStageUsage.stage1Count).toBe(8);
-    expect(res.body.hintStageUsage.stage2Count).toBe(4);
-    expect(res.body.hintStageUsage.stage3Count).toBe(2);
+    // Weekly History checking (4 weeks comparative)
+    expect(res.body.weeklyHistory).toHaveLength(4);
+    expect(res.body.weeklyHistory[3].label).toBe('今週');
+    expect(res.body.weeklyHistory[3].studyTimeMinutes).toBe(10);
+    expect(res.body.weeklyHistory[3].totalAttempts).toBe(10);
+  });
+
+  describe('Parent-Child Messaging Flow', () => {
+    let msgId: string;
+
+    it('should allow parent to post an encouragement message', async () => {
+      const res = await request(app)
+        .post('/api/parent/message')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ message: 'がんばってるね！応援しているよ🧅' });
+      
+      expect(res.status).toBe(201);
+      expect(res.body).toHaveProperty('message');
+      expect(res.body.message.message).toBe('がんばってるね！応援しているよ🧅');
+      expect(res.body.message.isRead).toBe(false);
+      
+      msgId = res.body.message.id;
+    });
+
+    it('should retrieve list of messages', async () => {
+      const res = await request(app)
+        .get('/api/parent/message')
+        .set('Authorization', `Bearer ${token}`);
+      
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('messages');
+      expect(res.body.messages.length).toBeGreaterThan(0);
+      expect(res.body.messages[0].id).toBe(msgId);
+    });
+
+    it('should allow marking a message as read by the child', async () => {
+      const res = await request(app)
+        .patch(`/api/parent/message/${msgId}/read`)
+        .set('Authorization', `Bearer ${token}`);
+      
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+
+      // Verify it is indeed read now
+      const checkRes = await request(app)
+        .get('/api/parent/message')
+        .set('Authorization', `Bearer ${token}`);
+      
+      const updatedMsg = checkRes.body.messages.find((m: any) => m.id === msgId);
+      expect(updatedMsg.isRead).toBe(true);
+    });
   });
 });

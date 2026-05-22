@@ -17,10 +17,14 @@ model User {
   level          Int         @default(1)
   streakCount    Int         @default(0)
   lastActiveDate DateTime?
+  parentalConsent Boolean    @default(false)
+  aiHintCountToday Int       @default(0)
+  lastAiHintDate  String?
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
   attempts       Attempt[]
   badges         UserBadge[]
+  parentMessages ParentMessage[]
 }
 
 model Subject {
@@ -105,4 +109,13 @@ model UserBadge {
   earnedAt DateTime @default(now())
 
   @@id([userId, badgeId])
+}
+
+model ParentMessage {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
 }

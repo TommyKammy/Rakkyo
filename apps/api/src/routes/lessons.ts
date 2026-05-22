@@ -286,12 +286,38 @@ const hintSchema = z.object({
 });
 
 const hintCache = new AiResponseCache(24 * 60 * 60 * 1000); // 24 hours TTL
+const lastHintRequestTimes = new Map<string, number>();
 
 router.post('/hint', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const parsed = hintSchema.parse(req.body);
     const userId = req.userId!;
     const nextStage = (Math.min(3, Math.max(1, parsed.hintsUsed + 1))) as 1 | 2 | 3;
+
+    // --- 1. 連投制限 (Rate Limit - 3s) ---
+    const now = Date.now();
+    const lastRequestTime = lastHintRequestTimes.get(userId);
+    if (process.env.NODE_ENV !== 'test' && lastRequestTime && now - lastRequestTime < 3000) {
+      res.json({
+        hintText: "**うわっ、ちょっと早すぎるよ！落ち着いて、少し時間を置いてからもう一度聞いてね 🧅**",
+        stage: parsed.hintsUsed,
+        fromCache: false,
+        rateLimited: true
+      });
+      return;
+    }
+    lastHintRequestTimes.set(userId, now);
+
+    // --- 2. Abuse不適切入力検知 ---
+    if (parsed.userQuestion && SafetyFilter.isAbusive(parsed.userQuestion)) {
+      res.json({
+        hintText: "**ラッキョくんとはお勉強のお話をしてほしいな！いっしょに問題を解いてみよう 🧅**",
+        stage: parsed.hintsUsed,
+        fromCache: false,
+        isAbusive: true
+      });
+      return;
+    }
 
     // Bypass cache check if userQuestion is provided to ensure dynamic, real-time responses
     if (!parsed.userQuestion) {
@@ -356,6 +382,62 @@ router.post('/hint', authMiddleware, async (req: AuthenticatedRequest, res: Resp
       return;
     }
 
+    // --- 3. AIコスト上限とフォールバック (Cost Control) ---
+    const rawMax = process.env.MAX_AI_HINTS_PER_DAY;
+    const maxHintsPerDay = (rawMax !== undefined && rawMax !== 'undefined' && rawMax !== '')
+      ? Number(rawMax)
+      : 20;
+    let isMock = req.isMock || false;
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    let aiHintCountToday = 0;
+    let lastAiHintDate = '';
+
+    if (!isMock) {
+      try {
+        const user = await prisma.user.findUnique({ where: { id: userId } });
+        if (user) {
+          aiHintCountToday = user.aiHintCountToday;
+          lastAiHintDate = user.lastAiHintDate || '';
+        }
+      } catch (dbError) {
+        console.warn('⚠️ DB query failed for User. Falling back to Mock DB.');
+        isMock = true;
+      }
+    }
+
+    if (isMock) {
+      const mockUser = mockDb.findUserById(userId);
+      if (mockUser) {
+        aiHintCountToday = mockUser.aiHintCountToday;
+        lastAiHintDate = mockUser.lastAiHintDate || '';
+      }
+    }
+
+    // 日付が変わっていれば本日のカウントはリセット
+    if (lastAiHintDate !== todayStr) {
+      aiHintCountToday = 0;
+    }
+
+    if (aiHintCountToday >= maxHintsPerDay) {
+      // 静的ヒントにフォールバック
+      const staticHints = foundQuestion.hints || [];
+      const stageIdx = parsed.hintsUsed; // 0, 1, 2
+      let staticHintText = "いっしょに考えてみよう！もう一度問題をよく読んでみてね。";
+      if (staticHints.length > 0) {
+        const idx = Math.min(staticHints.length - 1, stageIdx);
+        staticHintText = staticHints[idx];
+      }
+
+      res.json({
+        hintText: `**今日はたくさんラッキョくんとお勉強したね！AIヒントはお休みだけど、代わりに問題のヒントをあげるよ。いっしょにがんばろう！ 🧅**\n\n${staticHintText}`,
+        stage: nextStage,
+        fromCache: false,
+        limitExceeded: true
+      });
+      return;
+    }
+
     // Input PII sanitization at API level
     const sanitizedPrompt = SafetyFilter.sanitizeInput(foundQuestion.prompt);
 
@@ -370,6 +452,27 @@ router.post('/hint', authMiddleware, async (req: AuthenticatedRequest, res: Resp
       userQuestion: parsed.userQuestion
     });
 
+    // AI呼び出しが成功したため、使用回数を更新
+    const newCount = lastAiHintDate === todayStr ? aiHintCountToday + 1 : 1;
+    if (!isMock) {
+      try {
+        await prisma.user.update({
+          where: { id: userId },
+          data: {
+            aiHintCountToday: newCount,
+            lastAiHintDate: todayStr
+          }
+        });
+      } catch (dbError) {
+        console.error('Failed to update user AI count in DB:', dbError);
+      }
+    } else {
+      mockDb.updateUser(userId, {
+        aiHintCountToday: newCount,
+        lastAiHintDate: todayStr
+      });
+    }
+
     if (!parsed.userQuestion) {
       hintCache.set(userId, parsed.questionId, nextStage, result.hintText);
     }
@@ -378,7 +481,8 @@ router.post('/hint', authMiddleware, async (req: AuthenticatedRequest, res: Resp
       hintText: result.hintText,
       stage: result.stage,
       fromCache: false,
-      isMock: result.isMock
+      isMock: result.isMock,
+      aiHintCountToday: newCount
     });
 
   } catch (error) {

@@ -12,7 +12,8 @@ const registerSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
   nickname: z.string().min(1),
-  schoolYear: z.number().int().min(1).max(3).optional().default(1)
+  schoolYear: z.number().int().min(1).max(3).optional().default(1),
+  parentalConsent: z.boolean().refine(val => val === true, { message: '保護者の同意が必要です。' })
 });
 
 const loginSchema = z.object({
@@ -46,7 +47,8 @@ router.post('/register', async (req, res, next) => {
           email: parsed.email,
           password: passwordHash,
           nickname: parsed.nickname,
-          schoolYear: parsed.schoolYear
+          schoolYear: parsed.schoolYear,
+          parentalConsent: parsed.parentalConsent
         }
       });
     } catch (dbError) {
@@ -63,7 +65,8 @@ router.post('/register', async (req, res, next) => {
         email: parsed.email,
         passwordHash,
         nickname: parsed.nickname,
-        schoolYear: parsed.schoolYear
+        schoolYear: parsed.schoolYear,
+        parentalConsent: parsed.parentalConsent
       });
     }
 
@@ -76,6 +79,7 @@ router.post('/register', async (req, res, next) => {
         email: user.email,
         nickname: user.nickname,
         schoolYear: user.schoolYear,
+        parentalConsent: 'parentalConsent' in user ? user.parentalConsent : false,
         currentXp: 'currentXp' in user ? user.currentXp : 0,
         level: 'level' in user ? user.level : 1,
         streakCount: 'streakCount' in user ? user.streakCount : 0,
@@ -134,6 +138,7 @@ router.post('/login', async (req, res, next) => {
         email: user.email,
         nickname: user.nickname,
         schoolYear: user.schoolYear,
+        parentalConsent: 'parentalConsent' in user ? user.parentalConsent : false,
         currentXp: 'currentXp' in user ? user.currentXp : 0,
         level: 'level' in user ? user.level : 1,
         streakCount: 'streakCount' in user ? user.streakCount : 0,

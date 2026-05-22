@@ -12,6 +12,7 @@ export default function WelcomePage() {
   const [password, setPassword] = useState("");
   const [nickname, setNickname] = useState("");
   const [schoolYear, setSchoolYear] = useState<number>(1);
+  const [parentalConsent, setParentalConsent] = useState(false);
   
   // Feedback states
   const [error, setError] = useState<string | null>(null);
@@ -99,13 +100,19 @@ export default function WelcomePage() {
       return;
     }
 
+    if (!parentalConsent) {
+      setError("保護者の同意チェックを入れてください！");
+      setIsLoading(false);
+      return;
+    }
+
     try {
       const response = await fetch("http://localhost:4000/api/auth/register", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ email, password, nickname, schoolYear }),
+        body: JSON.stringify({ email, password, nickname, schoolYear, parentalConsent }),
       });
 
       const data = await response.json();
@@ -131,6 +138,7 @@ export default function WelcomePage() {
         email: email,
         nickname: nickname,
         schoolYear: schoolYear,
+        parentalConsent: parentalConsent,
         currentXp: 0,
         level: 1,
         streakCount: 1,
@@ -376,6 +384,28 @@ export default function WelcomePage() {
                   中学3年生 🔒
                 </button>
               </div>
+            </div>
+
+            {/* Parental Consent Checkbox */}
+            <div className="flex items-start gap-2 bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl">
+              <input
+                id="parental-consent"
+                type="checkbox"
+                checked={parentalConsent}
+                onChange={(e) => setParentalConsent(e.target.checked)}
+                className="w-5 h-5 rounded border-2 border-slate-200 text-pastel-purple focus:ring-pastel-purple-border mt-0.5 cursor-pointer accent-indigo-500"
+              />
+              <label htmlFor="parental-consent" className="text-xs font-bold text-slate-500 leading-relaxed cursor-pointer select-none">
+                保護者（お父さん・お母さんなど）が、
+                <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-indigo-500 underline mx-1 hover:text-indigo-600">
+                  利用規約
+                </a>
+                および
+                <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-indigo-500 underline mx-1 hover:text-indigo-600">
+                  プライバシーポリシー
+                </a>
+                に同意します。
+              </label>
             </div>
 
             <button

@@ -71,4 +71,31 @@ export class SafetyFilter {
 
     return false;
   }
+
+  /**
+   * Scans input text for inappropriate content (abusive words, violence, sexual language, or study-unrelated requests).
+   * Returns true if inappropriate content is detected, false otherwise.
+   */
+  static isAbusive(input: string): boolean {
+    const cleaned = input.toLowerCase().trim();
+    if (!cleaned) return false;
+
+    const abusiveKeywords = [
+      // 罵倒・不適切表現 (Abusive / offensive Japanese)
+      "死ね", "ばか", "バカ", "馬鹿", "うんこ", "うんち", "殺す", "きもい", "キモい", "クソ", "糞", "ゴミ", "ごみ",
+      // セクシャル (Sexual / sensitive terms)
+      "エッチ", "えっち", "セックス", "せっくす", "ちんちん", "おっぱい", "変態", "へんたい",
+      // お勉強外の対話強要 (Non-educational prompts / bypass attempts)
+      "ゲームしよう", "ゲームして", "遊ぼう", "あそぼう", "宿題やって", "宿題解いて",
+      "答えを教えて", "答え教えて", "答えだけ", "答えをだして", "答えだして"
+    ];
+
+    for (const keyword of abusiveKeywords) {
+      if (cleaned.includes(keyword)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
 }

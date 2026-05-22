@@ -15,7 +15,8 @@ describe('Lessons Router /api/lessons', () => {
         email: testEmail,
         password: testPassword,
         nickname: testNickname,
-        schoolYear: 1
+        schoolYear: 1,
+        parentalConsent: true
       });
     token = regRes.body.token;
   });
@@ -178,6 +179,51 @@ describe('Lessons Router /api/lessons', () => {
 
       expect(res2.status).toBe(200);
       expect(res2.body.fromCache).toBe(false);
+    });
+
+    it('should detect abusive input and return a friendly safety message', async () => {
+      const res = await request(app)
+        .post('/api/lessons/hint')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          questionId: '$-5 + 3$ を計算しなさい。',
+          hintsUsed: 0,
+          userQuestion: 'ばか死ね遊ぼう'
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.isAbusive).toBe(true);
+      expect(res.body.hintText).toContain('お勉強のお話をしてほしいな');
+    });
+
+    it('should fallback to static hints when the maximum daily AI limit is exceeded', async () => {
+      const originalLimit = process.env.MAX_AI_HINTS_PER_DAY;
+      process.env.MAX_AI_HINTS_PER_DAY = '0';
+
+      try {
+        // Clear cache first to bypass cache and hit limit logic
+        await request(app)
+          .post('/api/lessons/hint/cache/clear')
+          .set('Authorization', `Bearer ${token}`);
+
+        const res = await request(app)
+          .post('/api/lessons/hint')
+          .set('Authorization', `Bearer ${token}`)
+          .send({
+            questionId: '$-5 + 3$ を計算しなさい。',
+            hintsUsed: 0
+          });
+
+        expect(res.status).toBe(200);
+        expect(res.body.limitExceeded).toBe(true);
+        expect(res.body.hintText).toContain('今日はたくさんラッキョくんとお勉強したね');
+      } finally {
+        if (originalLimit === undefined) {
+          delete process.env.MAX_AI_HINTS_PER_DAY;
+        } else {
+          process.env.MAX_AI_HINTS_PER_DAY = originalLimit;
+        }
+      }
     });
   });
 

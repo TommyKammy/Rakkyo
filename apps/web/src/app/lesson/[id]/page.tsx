@@ -333,7 +333,15 @@ function ExerciseScreenContent() {
     // Clean text from LaTeX segments to make TTS flow nicely
     let cleanText = text;
     if (subjectCode === "english") {
-      cleanText = text.replace(/\$/g, "");
+      cleanText = text
+        .replace(/\$/g, "")
+        .replace(/“/g, "「")
+        .replace(/”/g, "」")
+        .replace(/"/g, "「")
+        .replace(/’/g, "'")
+        .replace(/\[\s*\]/g, " ほにゃらら ") // Convert empty brackets into kid-friendly "honyarara"
+        .replace(/\[/g, " ")
+        .replace(/\]/g, " ");
     } else {
       cleanText = text
         .replace(/\$/g, "")
@@ -345,12 +353,23 @@ function ExerciseScreenContent() {
         .replace(/-/g, "マイナス");
     }
 
+    // Language misdetection guard: prefix with a Japanese full-width space.
+    // This forces browser engine heuristics to recognize the string context as Japanese (ja-JP)
+    // rather than falling back to en-US defaults when it encounters alphabetical fragments.
+    cleanText = "　" + cleanText;
+
     const utterance = new SpeechSynthesisUtterance(cleanText);
     utterance.lang = "ja-JP"; // Speak in Japanese across all subjects (including English) as requested by the user
     utterance.rate = 0.92; // Optimized rate: warm, slow enough for comprehension, but natural rhythm
 
-    // Explicitly bind localized voices, prioritizing modern high-quality neural voices
-    const availableVoices = voices.length > 0 ? voices : (typeof window !== "undefined" && window.speechSynthesis ? window.speechSynthesis.getVoices() : []);
+    // Explicitly bind localized voices, prioritizing modern high-quality neural voices.
+    // Try both cache state and direct synchronous fetch to ensure it works on the very first user interaction.
+    let availableVoices = voices.length > 0 ? voices : window.speechSynthesis.getVoices();
+    if (!availableVoices || availableVoices.length === 0) {
+      // Force instant query synchronous update
+      availableVoices = window.speechSynthesis.getVoices() || [];
+    }
+
     if (availableVoices.length > 0) {
       const jaVoices = availableVoices.filter(v => {
         const langLower = v.lang.toLowerCase().replace("_", "-");
