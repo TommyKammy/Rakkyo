@@ -24,6 +24,13 @@ function getJstDateString(date: Date): string {
   return jstDate.toISOString().split('T')[0];
 }
 
+function checkQuestsCompleted(attempts: any[]): { adventure: boolean; grit: boolean; intuition: boolean } {
+  const adventure = attempts.length >= 3;
+  const grit = attempts.some(a => a.isCorrect && a.hintsUsed >= 1);
+  const intuition = attempts.some(a => a.isCorrect && a.hintsUsed === 0);
+  return { adventure, grit, intuition };
+}
+
 // Evaluate answer route
 router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -98,26 +105,94 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
       currentStreak = 1;
     }
 
-    // 3. Process XP and Level Ups if Correct
-    let currentXp = user.currentXp || 0;
-    let currentLevel = user.level || 1;
-    let leveledUp = false;
-    
-    // Bonus XP: +15 XP for review completion. Normal: 10 XP. Total review: 25 XP.
-    const xpAwarded = isCorrect ? (parsed.isReview ? 25 : 10) : 0;
-
+    // 3. Grit / Retry Review Bonus Detection
+    let isGritBonus = false;
     if (isCorrect) {
-      currentXp += xpAwarded;
-      let xpNeeded = currentLevel * 100;
-      while (currentXp >= xpNeeded) {
-        currentXp -= xpNeeded;
-        currentLevel += 1;
-        leveledUp = true;
-        xpNeeded = currentLevel * 100;
+      if (isMock) {
+        const pastAttempts = mockDb.getUserAttempts(userId);
+        isGritBonus = pastAttempts.some(
+          a => a.questionId === parsed.questionId && (!a.isCorrect || a.hintsUsed >= 2)
+        );
+      } else {
+        try {
+          const pastDbAttempts = await prisma.attempt.findMany({
+            where: { userId, questionId: parsed.questionId }
+          });
+          isGritBonus = pastDbAttempts.some(a => !a.isCorrect || a.hintsUsed >= 2);
+        } catch (e) {
+          const pastAttempts = mockDb.getUserAttempts(userId);
+          isGritBonus = pastAttempts.some(
+            a => a.questionId === parsed.questionId && (!a.isCorrect || a.hintsUsed >= 2)
+          );
+        }
       }
     }
 
-    // 4. Badges awarding logic
+    // 4. Quest Progress Before Saving
+    let todayAttemptsBefore: any[] = [];
+    if (isMock) {
+      const allMockAttemptsBefore = mockDb.getUserAttempts(userId);
+      todayAttemptsBefore = allMockAttemptsBefore.filter(a => getJstDateString(new Date(a.createdAt)) === todayStr);
+    } else {
+      try {
+        const allDbAttempts = await prisma.attempt.findMany({ where: { userId } });
+        todayAttemptsBefore = allDbAttempts.filter(a => getJstDateString(new Date(a.createdAt)) === todayStr);
+      } catch (e) {
+        todayAttemptsBefore = mockDb.getUserAttempts(userId).filter(a => getJstDateString(new Date(a.createdAt)) === todayStr);
+      }
+    }
+    const questsBefore = checkQuestsCompleted(todayAttemptsBefore);
+
+    // 5. Process XP and Level Ups
+    let currentXp = user.currentXp || 0;
+    let currentLevel = user.level || 1;
+    let leveledUp = false;
+
+    // Grit retry bonus: 30 XP, Review: 25 XP, Normal: 10 XP
+    const xpAwarded = isCorrect ? (isGritBonus ? 30 : (parsed.isReview ? 25 : 10)) : 0;
+
+    // Check quest progress after adding current attempt (simulate)
+    const currentAttemptFake = {
+      userId,
+      questionId: parsed.questionId,
+      isCorrect,
+      hintsUsed: parsed.hintsUsed,
+      answerSubmitted: parsed.answerSubmitted,
+      durationSeconds: parsed.durationSeconds,
+      createdAt: now.toISOString()
+    };
+    const todayAttemptsAfter = [...todayAttemptsBefore, currentAttemptFake];
+    const questsAfter = checkQuestsCompleted(todayAttemptsAfter);
+
+    const questUnlocked: { name: string; bonusXp: number }[] = [];
+    let questBonusXp = 0;
+    if (!questsBefore.adventure && questsAfter.adventure) {
+      questUnlocked.push({ name: '本日の大冒険 🧮', bonusXp: 50 });
+      questBonusXp += 50;
+    }
+    if (!questsBefore.grit && questsAfter.grit) {
+      questUnlocked.push({ name: '粘り強さの達人 🧅', bonusXp: 50 });
+      questBonusXp += 50;
+    }
+    if (!questsBefore.intuition && questsAfter.intuition) {
+      questUnlocked.push({ name: '直感マスター ⚡', bonusXp: 50 });
+      questBonusXp += 50;
+    }
+
+    if (isCorrect) {
+      currentXp += xpAwarded;
+    }
+    currentXp += questBonusXp;
+
+    let xpNeeded = currentLevel * 100;
+    while (currentXp >= xpNeeded) {
+      currentXp -= xpNeeded;
+      currentLevel += 1;
+      leveledUp = true;
+      xpNeeded = currentLevel * 100;
+    }
+
+    // 6. Badges awarding logic
     const newBadges: string[] = [];
     let updatedBadgesList: string[] = [];
 
@@ -125,6 +200,18 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
       // Mock Badge check
       const currentBadges = user.badges || [];
       updatedBadgesList = [...currentBadges];
+
+      // Insert current attempt in mock DB so badge logic can count it
+      mockDb.createAttempt({
+        userId,
+        questionId: parsed.questionId,
+        isCorrect,
+        hintsUsed: parsed.hintsUsed,
+        answerSubmitted: parsed.answerSubmitted,
+        durationSeconds: parsed.durationSeconds,
+      });
+
+      const allMockAttempts = mockDb.getUserAttempts(userId);
 
       // Award "🎉 冒険のはじまり" for starting / first XP
       if ((currentXp > 0 || currentLevel > 1) && !updatedBadgesList.includes('🎉 冒険のはじまり')) {
@@ -139,10 +226,57 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
       }
 
       // Award "📐 数学マスターの卵" for 5 correct answers
-      const correctAttempts = mockDb.getUserAttempts(userId).filter(a => a.isCorrect).length + (isCorrect ? 1 : 0);
-      if (correctAttempts >= 5 && !updatedBadgesList.includes('📐 数学マスターの卵')) {
+      const correctAttemptsCount = allMockAttempts.filter(a => a.isCorrect).length;
+      if (correctAttemptsCount >= 5 && !updatedBadgesList.includes('📐 数学マスターの卵')) {
         updatedBadgesList.push('📐 数学マスターの卵');
         newBadges.push('📐 数学マスターの卵');
+      }
+
+      // Award "🔥 Gritの達人" for gritScore >= 90% and attempts >= 5
+      if (!updatedBadgesList.includes('🔥 Gritの達人')) {
+        const gritAttempts = allMockAttempts.filter(a => a.hintsUsed >= 1);
+        const gritSuccess = gritAttempts.filter(a => a.isCorrect);
+        const gritScore = gritAttempts.length > 0 ? Math.round((gritSuccess.length / gritAttempts.length) * 100) : 0;
+        if (allMockAttempts.length >= 5 && gritAttempts.length >= 1 && gritScore >= 90) {
+          updatedBadgesList.push('🔥 Gritの達人');
+          newBadges.push('🔥 Gritの達人');
+        }
+      }
+
+      // Award "⌛ 無限の探求者" for study time >= 10h
+      if (!updatedBadgesList.includes('⌛ 無限の探求者')) {
+        const totalDurationSeconds = allMockAttempts.reduce((sum, a) => sum + (a.durationSeconds || 0), 0);
+        if (totalDurationSeconds >= 36000) {
+          updatedBadgesList.push('⌛ 無限の探求者');
+          newBadges.push('⌛ 無限の探求者');
+        }
+      }
+
+      // Award "ストリークの鬼" for streak >= 7
+      if (currentStreak >= 7 && !updatedBadgesList.includes('⚡ ストリークの鬼')) {
+        updatedBadgesList.push('⚡ ストリークの鬼');
+        newBadges.push('⚡ ストリークの鬼');
+      }
+
+      // Award "完璧主義者" for consecutiveCorrect >= 10
+      if (!updatedBadgesList.includes('🌟 完璧主義者')) {
+        const sortedAttempts = [...allMockAttempts].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+        let consecutiveCorrect = 0;
+        let maxConsecutiveCorrect = 0;
+        for (const a of sortedAttempts) {
+          if (a.isCorrect) {
+            consecutiveCorrect++;
+            if (consecutiveCorrect > maxConsecutiveCorrect) {
+              maxConsecutiveCorrect = consecutiveCorrect;
+            }
+          } else {
+            consecutiveCorrect = 0;
+          }
+        }
+        if (maxConsecutiveCorrect >= 10) {
+          updatedBadgesList.push('🌟 完璧主義者');
+          newBadges.push('🌟 完璧主義者');
+        }
       }
 
       // Save updates to mock database
@@ -152,15 +286,6 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
         streakCount: currentStreak,
         lastActiveDate: now.toISOString(),
         badges: updatedBadgesList
-      });
-
-      mockDb.createAttempt({
-        userId,
-        questionId: parsed.questionId,
-        isCorrect,
-        hintsUsed: parsed.hintsUsed,
-        answerSubmitted: parsed.answerSubmitted,
-        durationSeconds: parsed.durationSeconds,
       });
     } else {
       // Prisma DB Badge check
@@ -229,6 +354,68 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
           }
         }
 
+        // 4. Gritの達人 check
+        const gritBadge = dbBadges.find(b => b.name === 'Gritの達人');
+        if (gritBadge && !earnedBadgeNames.includes('Gritの達人')) {
+          const allDbAttemptsForUser = await prisma.attempt.findMany({ where: { userId } });
+          const gritAttempts = allDbAttemptsForUser.filter(a => a.hintsUsed >= 1);
+          const gritSuccess = gritAttempts.filter(a => a.isCorrect);
+          const gritScore = gritAttempts.length > 0 ? Math.round((gritSuccess.length / gritAttempts.length) * 100) : 0;
+          if (allDbAttemptsForUser.length >= 5 && gritAttempts.length >= 1 && gritScore >= 90) {
+            await prisma.userBadge.create({
+              data: { userId, badgeId: gritBadge.id }
+            });
+            newBadges.push(`${gritBadge.iconUrl} ${gritBadge.name}`);
+          }
+        }
+
+        // 5. 無限の探求者 check
+        const explorerBadge = dbBadges.find(b => b.name === '無限の探求者');
+        if (explorerBadge && !earnedBadgeNames.includes('無限の探求者')) {
+          const allDbAttemptsForUser = await prisma.attempt.findMany({ where: { userId } });
+          const totalDurationSeconds = allDbAttemptsForUser.reduce((sum, a) => sum + (a.durationSeconds || 0), 0);
+          if (totalDurationSeconds >= 36000) {
+            await prisma.userBadge.create({
+              data: { userId, badgeId: explorerBadge.id }
+            });
+            newBadges.push(`${explorerBadge.iconUrl} ${explorerBadge.name}`);
+          }
+        }
+
+        // 6. ストリークの鬼 check
+        const streakDemonBadge = dbBadges.find(b => b.name === 'ストリークの鬼');
+        if (streakDemonBadge && currentStreak >= streakDemonBadge.threshold && !earnedBadgeNames.includes('ストリークの鬼')) {
+          await prisma.userBadge.create({
+            data: { userId, badgeId: streakDemonBadge.id }
+          });
+          newBadges.push(`${streakDemonBadge.iconUrl} ${streakDemonBadge.name}`);
+        }
+
+        // 7. 完璧主義者 check
+        const perfectionistBadge = dbBadges.find(b => b.name === '完璧主義者');
+        if (perfectionistBadge && !earnedBadgeNames.includes('完璧主義者')) {
+          const allDbAttemptsForUser = await prisma.attempt.findMany({ where: { userId } });
+          const sortedAttempts = [...allDbAttemptsForUser].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+          let consecutiveCorrect = 0;
+          let maxConsecutiveCorrect = 0;
+          for (const a of sortedAttempts) {
+            if (a.isCorrect) {
+              consecutiveCorrect++;
+              if (consecutiveCorrect > maxConsecutiveCorrect) {
+                maxConsecutiveCorrect = consecutiveCorrect;
+              }
+            } else {
+              consecutiveCorrect = 0;
+            }
+          }
+          if (maxConsecutiveCorrect >= perfectionistBadge.threshold) {
+            await prisma.userBadge.create({
+              data: { userId, badgeId: perfectionistBadge.id }
+            });
+            newBadges.push(`${perfectionistBadge.iconUrl} ${perfectionistBadge.name}`);
+          }
+        }
+
         // Retrieve final complete badges list formatted for UI
         const finalUserBadges = await prisma.userBadge.findMany({
           where: { userId },
@@ -254,6 +441,8 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
     res.json({
       isCorrect,
       xpAwarded,
+      isGritBonus,
+      questUnlocked,
       leveledUp,
       newBadges,
       user: {
@@ -578,6 +767,63 @@ async function getAllQuestions(isMock: boolean, subjectCode?: string): Promise<Q
   }
   return list;
 }
+
+router.get('/quests', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const isMock = req.isMock;
+    const now = new Date();
+    const todayStr = getJstDateString(now);
+
+    let attempts: any[] = [];
+    if (isMock) {
+      attempts = mockDb.getUserAttempts(userId);
+    } else {
+      try {
+        attempts = await prisma.attempt.findMany({ where: { userId } });
+      } catch (e) {
+        attempts = mockDb.getUserAttempts(userId);
+      }
+    }
+
+    const todayAttempts = attempts.filter(a => getJstDateString(new Date(a.createdAt)) === todayStr);
+    const quests = checkQuestsCompleted(todayAttempts);
+
+    // Return current quest progress
+    res.json([
+      {
+        id: 'adventure',
+        name: '本日の大冒険 🧮',
+        description: '算数の問題を3問解こう！',
+        current: todayAttempts.length,
+        target: 3,
+        isCompleted: quests.adventure,
+        bonusXp: 50,
+      },
+      {
+        id: 'grit',
+        name: '粘り強さの達人 🧅',
+        description: 'ヒントを1回以上使って正解しよう！',
+        current: todayAttempts.filter(a => a.isCorrect && a.hintsUsed >= 1).length,
+        target: 1,
+        isCompleted: quests.grit,
+        bonusXp: 50,
+      },
+      {
+        id: 'intuition',
+        name: '直感マスター ⚡',
+        description: 'ヒントを使わずに正解しよう！',
+        current: todayAttempts.filter(a => a.isCorrect && a.hintsUsed === 0).length,
+        target: 1,
+        isCompleted: quests.intuition,
+        bonusXp: 50,
+      }
+    ]);
+  } catch (error) {
+    console.error('Get quests error:', error);
+    res.status(500).json({ error: 'サーバーエラーが発生しました。' });
+  }
+});
 
 // Progress Engine API
 router.get('/progress', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {

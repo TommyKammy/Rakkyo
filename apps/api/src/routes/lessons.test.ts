@@ -7,6 +7,20 @@ describe('Lessons Router /api/lessons', () => {
   const testNickname = 'テストくん';
   let token = '';
 
+  const createTestUserToken = async (suffix: string) => {
+    const email = `student_${suffix}_${Math.random().toString(36).substr(2, 9)}@rakkyo.com`;
+    const regRes = await request(app)
+      .post('/api/auth/register')
+      .send({
+        email: email,
+        password: testPassword,
+        nickname: testNickname,
+        schoolYear: 1,
+        parentalConsent: true
+      });
+    return regRes.body.token;
+  };
+
   beforeAll(async () => {
     // Register and login to retrieve a token
     const regRes = await request(app)
@@ -33,9 +47,10 @@ describe('Lessons Router /api/lessons', () => {
   });
 
   it('should evaluate a correct answer successfully and award XP', async () => {
+    const freshToken = await createTestUserToken('correct_xp');
     const res = await request(app)
       .post('/api/lessons/submit')
-      .set('Authorization', `Bearer ${token}`)
+      .set('Authorization', `Bearer ${freshToken}`)
       .send({
         questionId: '$-5 + 3$ を計算しなさい。',
         answerSubmitted: '-2',
@@ -45,7 +60,8 @@ describe('Lessons Router /api/lessons', () => {
     expect(res.status).toBe(200);
     expect(res.body.isCorrect).toBe(true);
     expect(res.body.xpAwarded).toBe(10);
-    expect(res.body.user.currentXp).toBe(10);
+    // 1st correct answer triggers "Intuition Master" quest (直感マスター) for +50XP, total 60XP
+    expect(res.body.user.currentXp).toBe(60);
     expect(res.body.user.level).toBe(1);
     expect(res.body.user.streakCount).toBe(1);
     // Should have earned the start badge
@@ -54,9 +70,10 @@ describe('Lessons Router /api/lessons', () => {
   });
 
   it('should evaluate an incorrect answer and not award XP', async () => {
+    const freshToken = await createTestUserToken('incorrect_xp');
     const res = await request(app)
       .post('/api/lessons/submit')
-      .set('Authorization', `Bearer ${token}`)
+      .set('Authorization', `Bearer ${freshToken}`)
       .send({
         questionId: '$-5 + 3$ を計算しなさい。',
         answerSubmitted: '99',
@@ -66,21 +83,21 @@ describe('Lessons Router /api/lessons', () => {
     expect(res.status).toBe(200);
     expect(res.body.isCorrect).toBe(false);
     expect(res.body.xpAwarded).toBe(0);
-    expect(res.body.user.currentXp).toBe(10); // Remains unchanged
+    expect(res.body.user.currentXp).toBe(0); // Remains 0 for new user
   });
 
   it('should trigger level up when crossing threshold', async () => {
-    // User is currently at level 1 with 10XP.
-    // Level 1 threshold is 100XP. Need 9 more correct answers (90XP) to reach level 2.
-    // Let's send 9 correct submissions.
-    let userXp = 10;
-    let userLevel = 1;
+    const freshToken = await createTestUserToken('levelup');
     let finalRes: any;
 
-    for (let i = 0; i < 9; i++) {
+    // Send 3 correct submissions.
+    // 1st correct answer: +10XP + 50XP (Intuition Quest) = 60XP
+    // 2nd correct answer: +10XP = 70XP
+    // 3rd correct answer: +10XP + 50XP (Adventure Quest) = 130XP -> Level up! level 2, remaining 30XP
+    for (let i = 0; i < 3; i++) {
       finalRes = await request(app)
         .post('/api/lessons/submit')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Authorization', `Bearer ${freshToken}`)
         .send({
           questionId: '$-5 + 3$ を計算しなさい。',
           answerSubmitted: '-2',
@@ -89,13 +106,23 @@ describe('Lessons Router /api/lessons', () => {
       expect(finalRes.status).toBe(200);
     }
 
-    // On the 9th correct answer (total 10 correct), XP should reach 100, resetting to 0 and leveling up to 2.
     expect(finalRes.body.isCorrect).toBe(true);
     expect(finalRes.body.leveledUp).toBe(true);
     expect(finalRes.body.user.level).toBe(2);
-    expect(finalRes.body.user.currentXp).toBe(0);
+    expect(finalRes.body.user.currentXp).toBe(30);
 
-    // Also verify "📐 数学マスターの卵" is awarded for >= 5 correct answers
+    // Also verify "📐 数学マスターの卵" is not yet awarded since it requires 5 correct answers, but let's check
+    // If we want to check "📐 数学マスターの卵", we need 2 more correct answers (total 5)
+    for (let i = 0; i < 2; i++) {
+      finalRes = await request(app)
+        .post('/api/lessons/submit')
+        .set('Authorization', `Bearer ${freshToken}`)
+        .send({
+          questionId: '$-5 + 3$ を計算しなさい。',
+          answerSubmitted: '-2',
+          hintsUsed: 0
+        });
+    }
     expect(finalRes.body.user.badges).toContain('📐 数学マスターの卵');
   });
 
@@ -250,9 +277,10 @@ describe('Lessons Router /api/lessons', () => {
 
   describe('POST /api/lessons/submit with duration and review details', () => {
     it('should store attempt with durationSeconds and reward bonus XP if isReview is true', async () => {
+      const freshToken = await createTestUserToken('review_xp');
       const res = await request(app)
         .post('/api/lessons/submit')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Authorization', `Bearer ${freshToken}`)
         .send({
           questionId: '$-5 + 3$ を計算しなさい。',
           answerSubmitted: '-2',
@@ -269,10 +297,11 @@ describe('Lessons Router /api/lessons', () => {
 
   describe('GET /api/lessons/reviews', () => {
     it('should return incorrect or hint-heavy questions for review', async () => {
+      const freshToken = await createTestUserToken('reviews_list');
       // First, submit an incorrect answer to trigger review recommendation
       await request(app)
         .post('/api/lessons/submit')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Authorization', `Bearer ${freshToken}`)
         .send({
           questionId: '$(-6) \\times (-3)$ を計算しなさい。',
           answerSubmitted: '999', // incorrect
@@ -282,7 +311,7 @@ describe('Lessons Router /api/lessons', () => {
 
       const res = await request(app)
         .get('/api/lessons/reviews')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Authorization', `Bearer ${freshToken}`);
 
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('questions');

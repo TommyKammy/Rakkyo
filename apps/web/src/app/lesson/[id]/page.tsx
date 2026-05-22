@@ -10,6 +10,8 @@ import {
   japaneseGrade1Curriculum
 } from "@rakkyo/curriculum";
 import { NumberLineDiagram, AlgebraScaleDiagram, CoordinatePlaneDiagram } from "../../../components/diagrams";
+import { RakkyoMascot } from "../../dashboard/components/RakkyoMascot";
+import { CongratsOverlay } from "../../dashboard/components/CongratsOverlay";
 
 // Helper to detect math diagram types based on curriculum contents
 function getMathDiagram(prompt: string, explanation: string = ""): React.ReactNode {
@@ -198,6 +200,20 @@ function ExerciseScreenContent() {
 
   // User details
   const [user, setUser] = useState<UserProfile | null>(null);
+
+  // Gamification & Dress-up states (Phase 10)
+  const [mascotEmotion, setMascotEmotion] = useState<'normal' | 'correct' | 'incorrect' | 'happy'>('normal');
+  const [currentOutfit, setCurrentOutfit] = useState("none");
+  const [isCongratsOpen, setIsCongratsOpen] = useState(false);
+  const [congratsData, setCongratsData] = useState<{
+    type: 'levelUp' | 'streak' | 'quest' | 'badge';
+    title?: string;
+    subtitle?: string;
+    bonusXp?: number;
+    badgeName?: string;
+    streakCount?: number;
+    level?: number;
+  } | null>(null);
 
   // Exercise states
   const [currentQIdx, setCurrentQIdx] = useState(0);
@@ -517,6 +533,8 @@ function ExerciseScreenContent() {
 
     try {
       setUser(JSON.parse(userStr));
+      const outfit = localStorage.getItem("rakkyo_outfit") || "none";
+      setCurrentOutfit(outfit);
     } catch (e) {
       router.push("/");
     }
@@ -577,9 +595,35 @@ function ExerciseScreenContent() {
           const data = await response.json();
           setIsCorrect(data.isCorrect);
 
+          if (data.isCorrect) {
+            setMascotEmotion('correct');
+          } else {
+            setMascotEmotion('incorrect');
+          }
+
           if (data.leveledUp) {
             setLevelUpTo(data.user.level);
-            setShowLevelUpModal(true);
+            setCongratsData({
+              type: 'levelUp',
+              level: data.user.level,
+              bonusXp: data.xpAwarded,
+            });
+            setIsCongratsOpen(true);
+          } else if (data.newBadges && data.newBadges.length > 0) {
+            setCongratsData({
+              type: 'badge',
+              badgeName: data.newBadges[0],
+              bonusXp: data.xpAwarded,
+            });
+            setIsCongratsOpen(true);
+          } else if (data.questUnlocked && data.questUnlocked.length > 0) {
+            setCongratsData({
+              type: 'quest',
+              title: `${data.questUnlocked[0].name} 達成！`,
+              subtitle: '本日のクエストをクリアしたよ！すごすぎる！🧅',
+              bonusXp: data.questUnlocked[0].bonusXp,
+            });
+            setIsCongratsOpen(true);
           }
 
           setUser(data.user);
@@ -593,6 +637,7 @@ function ExerciseScreenContent() {
 
     // Local fallback evaluation (offline mode)
     if (isAnsCorrect) {
+      setMascotEmotion('correct');
       // Award XP (+25 XP for review, +10 XP normally)
       const xpAwarded = isReview ? 25 : 10;
       const updatedUser = { ...user };
@@ -600,16 +645,28 @@ function ExerciseScreenContent() {
 
       // Check level up: Level * 100 XP threshold
       let xpNeeded = updatedUser.level * 100;
+      let levelUpTriggered = false;
       while (updatedUser.currentXp >= xpNeeded) {
         updatedUser.currentXp -= xpNeeded;
         updatedUser.level += 1;
         setLevelUpTo(updatedUser.level);
-        setShowLevelUpModal(true);
+        levelUpTriggered = true;
         xpNeeded = updatedUser.level * 100;
+      }
+
+      if (levelUpTriggered) {
+        setCongratsData({
+          type: 'levelUp',
+          level: updatedUser.level,
+          bonusXp: xpAwarded,
+        });
+        setIsCongratsOpen(true);
       }
 
       setUser(updatedUser);
       localStorage.setItem("rakkyo_user", JSON.stringify(updatedUser));
+    } else {
+      setMascotEmotion('incorrect');
     }
   };
 
@@ -623,6 +680,7 @@ function ExerciseScreenContent() {
     setHintStage(1);
     setShowFinalAnswer(false);
     setAiHints({});
+    setMascotEmotion('normal'); // Reset mascot emotion
 
     // Clear speech states
     if (typeof window !== "undefined" && window.speechSynthesis) {
@@ -840,43 +898,7 @@ function ExerciseScreenContent() {
               {/* Character widget */}
               <div className="flex items-center gap-3 bg-pastel-purple border border-pastel-purple-border p-3.5 rounded-2xl">
                 <div className="w-12 h-12 flex-shrink-0 animate-bounce-gentle">
-                  <svg viewBox="0 0 100 100" className="w-full h-full">
-                    <path
-                      d="M50,15 C28,30 25,65 30,80 C34,92 66,92 70,80 C75,65 72,30 50,15 Z"
-                      fill="#F7FEE7"
-                      stroke="#A3E635"
-                      strokeWidth="4"
-                    />
-                    <path
-                      d="M50,15 Q40,2 43,0 Q47,5 50,15 Z"
-                      fill="#4ADE80"
-                      stroke="#22C55E"
-                      strokeWidth="2.5"
-                    />
-                    <path
-                      d="M50,15 Q60,2 57,0 Q53,5 50,15 Z"
-                      fill="#4ADE80"
-                      stroke="#22C55E"
-                      strokeWidth="2.5"
-                    />
-                    {/* Little study hat */}
-                    <path d="M40,24 L60,24 L50,12 Z" fill="#7C3AED" stroke="#4C1D95" strokeWidth="2" />
-                    {/* Shiny Eyes */}
-                    <circle cx="40" cy="58" r="4.5" fill="#1E293B" />
-                    <circle cx="38.5" cy="56.5" r="1.5" fill="#FFFFFF" />
-                    <circle cx="60" cy="58" r="4.5" fill="#1E293B" />
-                    <circle cx="58.5" cy="56.5" r="1.5" fill="#FFFFFF" />
-                    <circle cx="34" cy="66" r="4" fill="#FBCFE8" />
-                    <circle cx="66" cy="66" r="4" fill="#FBCFE8" />
-                    {/* Smile */}
-                    <path
-                      d="M48,68 Q50,71 52,68"
-                      fill="none"
-                      stroke="#1E293B"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                    />
-                  </svg>
+                  <RakkyoMascot emotion={mascotEmotion === 'normal' ? 'happy' : mascotEmotion} outfit={currentOutfit} className="w-full h-full" />
                 </div>
                 <div className="text-2xs font-extrabold text-pastel-purple-dark leading-relaxed">
                   「あきらめないで！ヒントを順番に見ていくと、ひらめくかも！」
@@ -1200,6 +1222,21 @@ function ExerciseScreenContent() {
             </button>
           </div>
         </div>
+      )}
+
+      {/* 5. Phase 10 congrats dynamic 60fps overlay */}
+      {congratsData && (
+        <CongratsOverlay
+          isOpen={isCongratsOpen}
+          onClose={() => setIsCongratsOpen(false)}
+          type={congratsData.type}
+          title={congratsData.title}
+          subtitle={congratsData.subtitle}
+          bonusXp={congratsData.bonusXp}
+          badgeName={congratsData.badgeName}
+          streakCount={congratsData.streakCount}
+          level={congratsData.level}
+        />
       )}
 
     </div>

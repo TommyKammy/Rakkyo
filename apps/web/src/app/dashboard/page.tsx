@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { CongratsOverlay } from "./components/CongratsOverlay";
+import { ClosetModal } from "./components/ClosetModal";
+import { RakkyoMascot } from "./components/RakkyoMascot";
 
 interface UserProfile {
   id: string;
@@ -22,14 +25,49 @@ interface ParentMessage {
   createdAt: string;
 }
 
+interface QuestProgress {
+  id: string;
+  name: string;
+  description: string;
+  current: number;
+  target: number;
+  isCompleted: boolean;
+  bonusXp: number;
+}
+
+const ALL_BADGES = [
+  { name: "冒険のはじまり", emoji: "🎉", desc: "最初の第一歩を踏み出した証" },
+  { name: "数学マスターの卵", emoji: "📐", desc: "問題を5問正解した証" },
+  { name: "あきらめない心", emoji: "🔥", desc: "3日連続で勉強を続けた証" },
+  { name: "Gritの達人", emoji: "🔥", desc: "Gritスコア90%以上（5問以上解答）" },
+  { name: "無限の探求者", emoji: "⌛", desc: "総学習時間 10時間以上" },
+  { name: "ストリークの鬼", emoji: "⚡", desc: "7日連続で勉強を続けた証" },
+  { name: "完璧主義者", emoji: "🌟", desc: "10問連続で正解した証" },
+];
+
 export default function StudentDashboard() {
   const router = useRouter();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [mascotMessage, setMascotMessage] = useState("");
+  const [mascotEmotion, setMascotEmotion] = useState<'normal' | 'correct' | 'incorrect' | 'happy'>('normal');
   const [reviews, setReviews] = useState<any[]>([]);
   const [parentMessages, setParentMessages] = useState<ParentMessage[]>([]);
   const [latestUnreadMessage, setLatestUnreadMessage] = useState<ParentMessage | null>(null);
-  const [showConfetti, setShowConfetti] = useState(false);
+  
+  // Phase 10 Gamification States
+  const [quests, setQuests] = useState<QuestProgress[]>([]);
+  const [currentOutfit, setCurrentOutfit] = useState("none");
+  const [isClosetOpen, setIsClosetOpen] = useState(false);
+  const [isCongratsOpen, setIsCongratsOpen] = useState(false);
+  const [congratsData, setCongratsData] = useState<{
+    type: 'levelUp' | 'streak' | 'quest' | 'badge';
+    title?: string;
+    subtitle?: string;
+    bonusXp?: number;
+    badgeName?: string;
+    streakCount?: number;
+    level?: number;
+  } | null>(null);
 
   const fetchParentMessages = async (token: string) => {
     try {
@@ -85,6 +123,52 @@ export default function StudentDashboard() {
     ]);
   };
 
+  const fetchQuests = async (token: string) => {
+    try {
+      const response = await fetch("http://localhost:4000/api/lessons/quests", {
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setQuests(data);
+      }
+    } catch (e) {
+      console.warn("⚠️ Failed to fetch quests from API. Loading default local fallback...");
+      // Local simulated quest fallback
+      setQuests([
+        {
+          id: "adventure",
+          name: "本日の大冒険 🧮",
+          description: "算数の問題を3問解こう！",
+          current: 0,
+          target: 3,
+          isCompleted: false,
+          bonusXp: 50,
+        },
+        {
+          id: "grit",
+          name: "粘り強さの達人 🧅",
+          description: "ヒントを1回以上使って正解しよう！",
+          current: 0,
+          target: 1,
+          isCompleted: false,
+          bonusXp: 50,
+        },
+        {
+          id: "intuition",
+          name: "直感マスター ⚡",
+          description: "ヒントを使わずに正解しよう！",
+          current: 0,
+          target: 1,
+          isCompleted: false,
+          bonusXp: 50,
+        }
+      ]);
+    }
+  };
+
   useEffect(() => {
     const token = localStorage.getItem("rakkyo_token");
     const userStr = localStorage.getItem("rakkyo_user");
@@ -98,8 +182,13 @@ export default function StudentDashboard() {
       const parsedUser: UserProfile = JSON.parse(userStr);
       setUser(parsedUser);
       
+      // Load current equipped outfit
+      const outfit = localStorage.getItem("rakkyo_outfit") || "none";
+      setCurrentOutfit(outfit);
+
       fetchReviews(token, parsedUser.id);
       fetchParentMessages(token);
+      fetchQuests(token);
 
       // Mascot dynamic messages based on current states
       const messages = [
@@ -119,12 +208,13 @@ export default function StudentDashboard() {
   const handleLogout = () => {
     localStorage.removeItem("rakkyo_token");
     localStorage.removeItem("rakkyo_user");
+    localStorage.removeItem("rakkyo_outfit");
     router.push("/");
   };
 
   const handleReadMessage = async (msgId: string) => {
     const token = localStorage.getItem("rakkyo_token");
-    setShowConfetti(true);
+    setMascotEmotion('happy');
     
     try {
       if (token) {
@@ -152,9 +242,23 @@ export default function StudentDashboard() {
       console.error("Failed to read message", e);
     }
     
+    // Trigger celebration modal for getting parent's lovely message
+    setCongratsData({
+      type: 'badge',
+      title: '保護者からのエール！',
+      subtitle: 'おうちの人ががんばりを見守ってメッセージを送ってくれたよ！',
+      bonusXp: 0
+    });
+    setIsCongratsOpen(true);
+    
     setTimeout(() => {
-      setShowConfetti(false);
+      setMascotEmotion('normal');
     }, 4000);
+  };
+
+  const handleSelectOutfit = (outfitId: string) => {
+    localStorage.setItem("rakkyo_outfit", outfitId);
+    setCurrentOutfit(outfitId);
   };
 
   if (!user) {
@@ -175,7 +279,13 @@ export default function StudentDashboard() {
   // Default badges list if none is set
   const userBadges = user.badges && user.badges.length > 0
     ? user.badges
-    : ["🎉 冒険のはじまり", "🐣 算数ひよこ"];
+    : ["🎉 冒険のはじまり"];
+
+  // Helper to extract clean badge names (handling emojis if they are embedded like '🎉 冒険のはじまり')
+  const cleanUserBadgeNames = userBadges.map(b => {
+    const parts = b.split(" ");
+    return parts.length > 1 ? parts.slice(1).join(" ") : b;
+  });
 
   return (
     <div className="flex-1 flex flex-col max-w-5xl w-full mx-auto p-4 sm:p-6 md:p-8 space-y-6">
@@ -184,7 +294,7 @@ export default function StudentDashboard() {
       <header className="flex flex-wrap items-center justify-between gap-4 bg-white border-3 border-slate-100 rounded-3xl p-4 sm:px-6 bubbly-shadow">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 bg-pastel-blue rounded-2xl flex items-center justify-center font-extrabold text-pastel-blue-dark border-2 border-pastel-blue-border text-lg bubbly-shadow">
-            📐
+            🧅
           </div>
           <div>
             <h2 className="text-xl font-extrabold tracking-tight text-slate-800">
@@ -211,7 +321,7 @@ export default function StudentDashboard() {
             </div>
 
             {/* Streak Counter */}
-            <div className="h-10 px-4 bg-pastel-orange border-2 border-pastel-orange-border rounded-2xl flex items-center justify-center font-extrabold text-pastel-orange-dark text-sm bubbly-shadow gap-1">
+            <div className="h-10 px-4 bg-gradient-to-r from-amber-500 to-orange-500 border-2 border-amber-300 rounded-2xl flex items-center justify-center font-extrabold text-white text-sm bubbly-shadow gap-1.5 animate-pulse">
               🔥 {user.streakCount}日連続
             </div>
           </div>
@@ -228,54 +338,22 @@ export default function StudentDashboard() {
       {/* 2. Welcome Mascot Bubble Section */}
       <section className={`bg-white border-3 rounded-3xl p-6 bubbly-shadow flex flex-col md:flex-row items-center gap-6 transition-all duration-300 ${latestUnreadMessage ? "border-pastel-pink-border" : "border-slate-100"}`}>
         
-        {/* Animated Mascot */}
-        <div className="w-28 h-28 flex-shrink-0 animate-bounce-gentle select-none relative">
-          {latestUnreadMessage && (
-            <span className="absolute -top-2 -right-2 text-2xl animate-bounce">✉️</span>
-          )}
-          <svg viewBox="0 0 100 100" className="w-full h-full">
-            {/* Scallion Body */}
-            <path
-              d="M50,15 C28,30 25,65 30,80 C34,92 66,92 70,80 C75,65 72,30 50,15 Z"
-              fill="#F7FEE7"
-              stroke="#A3E635"
-              strokeWidth="4"
-            />
-            {/* Top Sprouts */}
-            <path
-              d="M50,15 Q40,2 43,0 Q47,5 50,15 Z"
-              fill="#4ADE80"
-              stroke="#22C55E"
-              strokeWidth="2.5"
-            />
-            <path
-              d="M50,15 Q60,2 57,0 Q53,5 50,15 Z"
-              fill="#4ADE80"
-              stroke="#22C55E"
-              strokeWidth="2.5"
-            />
-            {/* Cute mini adventurer hat */}
-            <path
-              d="M32,32 Q50,22 68,32 L64,28 Q50,18 36,28 Z"
-              fill="#F43F5E"
-              stroke="#BE123C"
-              strokeWidth="2"
-            />
-            {/* Rosy Cheeks */}
-            <circle cx="38" cy="66" r="6" fill="#FBCFE8" />
-            <circle cx="62" cy="66" r="6" fill="#FBCFE8" />
-            {/* Happy Eyes */}
-            <path d="M35,58 Q40,54 45,58" fill="none" stroke="#1E293B" strokeWidth="3" strokeLinecap="round" />
-            <path d="M55,58 Q60,54 65,58" fill="none" stroke="#1E293B" strokeWidth="3" strokeLinecap="round" />
-            {/* Smiling Mouth */}
-            <path
-              d="M47,68 Q50,73 53,68"
-              fill="none"
-              stroke="#1E293B"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-            />
-          </svg>
+        {/* Animated Mascot Layer with Outfit rendering */}
+        <div className="flex flex-col items-center gap-2 flex-shrink-0">
+          <div className="w-28 h-28 animate-bounce-gentle select-none relative cursor-pointer" onClick={() => setIsClosetOpen(true)}>
+            {latestUnreadMessage && (
+              <span className="absolute -top-2 -right-2 text-2xl animate-bounce">✉️</span>
+            )}
+            <RakkyoMascot emotion={mascotEmotion} outfit={currentOutfit} className="w-full h-full" />
+          </div>
+          
+          {/* Closet Button */}
+          <button
+            onClick={() => setIsClosetOpen(true)}
+            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 border-2 border-indigo-700 text-white font-extrabold rounded-2xl text-2xs flex items-center gap-1.5 active:translate-y-[1px] transition-all bubbly-shadow cursor-pointer"
+          >
+            <span>👕 きせかえ</span>
+          </button>
         </div>
 
         {/* Talk Bubble */}
@@ -346,7 +424,6 @@ export default function StudentDashboard() {
               
               {/* Mathematics (ACTIVE) */}
               <div className="bg-pastel-green border-3 border-pastel-green-border rounded-3xl p-5 bubbly-shadow flex flex-col justify-between h-48 hover:scale-[1.02] transition-transform select-none relative overflow-hidden">
-                {/* Background SVG grid */}
                 <div className="absolute right-[-10px] bottom-[-10px] opacity-15 text-7xl font-bold">
                   📐
                 </div>
@@ -515,14 +592,14 @@ export default function StudentDashboard() {
                       復習候補：{reviews.length} 問
                     </p>
                     <p className="text-xs font-bold text-slate-600 mt-2 leading-relaxed">
-                      まちがえた問題や、ヒントをたくさん使った問題だよ！完璧にマスターしよう！
+                      過去に間違えたり、ヒントを沢山使った問題だよ！再挑戦で <strong className="text-indigo-600 font-black">+30 XP</strong> 克服ボーナス！
                     </p>
                   </div>
                 </div>
                 
                 <div className="text-3xs bg-pastel-yellow border border-pastel-yellow-border text-pastel-yellow-dark px-2.5 py-1 rounded-full font-extrabold self-start flex items-center gap-1">
                   <span>💎 報酬:</span>
-                  <span>クリア時に +15 XP ボーナス！</span>
+                  <span>克服クリアで計 +30 XP 獲得！</span>
                 </div>
 
                 <button
@@ -546,106 +623,114 @@ export default function StudentDashboard() {
             </div>
           )}
 
-          {/* Daily Mission Card */}
+          {/* Phase 10: Daily Quests Panel */}
           <div className="bg-pastel-yellow border-3 border-pastel-yellow-border rounded-3xl p-6 bubbly-shadow space-y-4">
             <h3 className="text-md font-extrabold text-pastel-yellow-dark tracking-tight flex items-center gap-1.5">
-              🎯 今日のミッション
+              🎯 本日のデイリークエスト
             </h3>
             
-            <div className="bg-white border-2 border-pastel-yellow-border rounded-2xl p-4 flex gap-3 items-start relative overflow-hidden">
-              <div className="text-2xl mt-0.5">🌟</div>
-              <div>
-                <h5 className="font-extrabold text-sm text-slate-800 leading-tight">
-                  中1数学：一次方程式
-                </h5>
-                <p className="text-2xs text-slate-400 font-semibold mt-0.5">
-                  解き方と天秤のルール
-                </p>
-                <p className="text-xs font-bold text-slate-600 mt-2">
-                  方程式のレッスンを1つクリアしよう！
-                </p>
-                <div className="mt-2.5 text-3xs bg-pastel-pink border border-pastel-pink-border text-pastel-pink-dark px-2 py-0.5 rounded-full font-extrabold inline-block">
-                  報酬: +20 XP
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Badges Panel */}
-          <div className="bg-white border-3 border-slate-100 rounded-3xl p-6 bubbly-shadow space-y-4">
-            <h3 className="text-md font-extrabold text-slate-800 tracking-tight flex items-center gap-2">
-              🏆 あつめたバッジ ({userBadges.length})
-            </h3>
-            
-            <div className="grid grid-cols-2 gap-3">
-              {userBadges.map((badgeName, idx) => (
-                <div
-                  key={idx}
-                  className="bg-slate-50 border-2 border-slate-100 p-2.5 rounded-2xl flex flex-col items-center justify-center text-center bubbly-shadow hover:scale-105 transition-transform"
-                >
-                  <div className="text-2xl mb-1.5 select-none">
-                    {badgeName.split(" ")[0]}
+            <div className="space-y-3.5">
+              {quests.map((quest) => (
+                <div key={quest.id} className={`bg-white border-2 rounded-2xl p-4 flex flex-col gap-2 relative overflow-hidden transition-all ${
+                  quest.isCompleted ? 'border-amber-400 bg-amber-50/20' : 'border-pastel-yellow-border'
+                }`}>
+                  <div className="flex justify-between items-start gap-2">
+                    <div>
+                      <h5 className="font-extrabold text-sm text-slate-800 leading-tight">
+                        {quest.name}
+                      </h5>
+                      <p className="text-[10px] text-slate-400 font-bold mt-0.5">
+                        {quest.description}
+                      </p>
+                    </div>
+                    {quest.isCompleted ? (
+                      <span className="text-lg animate-bounce">✅</span>
+                    ) : (
+                      <span className="text-[10px] font-black text-amber-500 bg-amber-100 px-1.5 py-0.5 rounded-md">
+                        +{quest.bonusXp} XP
+                      </span>
+                    )}
                   </div>
-                  <span className="text-3xs font-extrabold text-slate-600 tracking-wide truncate w-full">
-                    {badgeName.split(" ").slice(1).join(" ")}
-                  </span>
+
+                  {/* Progress Gauge */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[9px] text-slate-400 font-extrabold">
+                      <span>進みぐあい</span>
+                      <span>{quest.current} / {quest.target}</span>
+                    </div>
+                    <div className="h-2.5 w-full bg-slate-100 border border-slate-200 rounded-full overflow-hidden p-[1px]">
+                      <div
+                        style={{ width: `${Math.min(100, Math.floor((quest.current / quest.target) * 100))}%` }}
+                        className={`h-full rounded-full transition-all duration-300 ${
+                          quest.isCompleted ? 'bg-amber-400' : 'bg-yellow-300'
+                        }`}
+                      />
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
           </div>
 
-        </div>
-      {/* Confetti Overlay */}
-      {showConfetti && (
-        <div className="fixed inset-0 pointer-events-none z-[9999] overflow-hidden">
-          {Array.from({ length: 60 }).map((_, i) => {
-            const left = Math.random() * 100;
-            const delay = Math.random() * 3;
-            const duration = 2 + Math.random() * 2;
-            const size = 6 + Math.random() * 12;
-            const colors = ["#F43F5E", "#3B82F6", "#10B981", "#EAB308", "#A855F7", "#EC4899", "#F97316"];
-            const color = colors[Math.floor(Math.random() * colors.length)];
-            const rotate = Math.random() * 360;
+          {/* Phase 10: Dynamic Badge Collection Shelf */}
+          <div className="bg-white border-3 border-slate-100 rounded-3xl p-6 bubbly-shadow space-y-4">
+            <h3 className="text-md font-extrabold text-slate-800 tracking-tight flex items-center gap-2">
+              🏆 マイバッジコレクション ({cleanUserBadgeNames.length} / {ALL_BADGES.length})
+            </h3>
             
-            return (
-              <div
-                key={i}
-                className="absolute top-[-5%] rounded-sm opacity-90 animate-fall"
-                style={{
-                  left: `${left}%`,
-                  width: `${size}px`,
-                  height: `${size}px`,
-                  backgroundColor: color,
-                  transform: `rotate(${rotate}deg)`,
-                  animationDelay: `${delay}s`,
-                  animationDuration: `${duration}s`,
-                }}
-              />
-            );
-          })}
-          <style dangerouslySetInnerHTML={{__html: `
-            @keyframes fall {
-              0% {
-                top: -5%;
-                transform: translateX(0) rotate(0deg);
-              }
-              50% {
-                transform: translateX(50px) rotate(180deg);
-              }
-              100% {
-                top: 105%;
-                transform: translateX(-50px) rotate(360deg);
-              }
-            }
-            .animate-fall {
-              animation-name: fall;
-              animation-timing-function: linear;
-              animation-iteration-count: infinite;
-            }
-          `}} />
+            {/* Shelf Grid */}
+            <div className="grid grid-cols-2 gap-3.5 bg-gradient-to-b from-slate-50 to-slate-100/60 p-3.5 rounded-2xl border-2 border-slate-100">
+              {ALL_BADGES.map((badge, idx) => {
+                const isEarned = cleanUserBadgeNames.includes(badge.name);
+                
+                return (
+                  <div
+                    key={idx}
+                    className={`relative p-3 rounded-2xl flex flex-col items-center justify-center text-center transition-all bubbly-shadow border-2 ${
+                      isEarned 
+                        ? "bg-white border-indigo-100 scale-100 hover:scale-105 shadow-[0_4px_10px_rgba(99,102,241,0.08)]"
+                        : "bg-slate-200/50 border-slate-300/30 scale-95 grayscale opacity-45"
+                    }`}
+                    title={badge.desc}
+                  >
+                    <div className="text-3xl mb-1 select-none animate-float-gentle">
+                      {badge.emoji}
+                    </div>
+                    <span className="text-[10px] font-black text-slate-700 tracking-tight truncate w-full">
+                      {badge.name}
+                    </span>
+                    {!isEarned && (
+                      <span className="absolute bottom-1 right-2 text-[8px] font-bold text-slate-400">未</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
         </div>
-      )}
       </main>
+
+      {/* Gamification Interactive Modals */}
+      <ClosetModal
+        isOpen={isClosetOpen}
+        onClose={() => setIsClosetOpen(false)}
+        userLevel={user.level}
+        currentOutfit={currentOutfit}
+        onSelectOutfit={handleSelectOutfit}
+      />
+
+      <CongratsOverlay
+        isOpen={isCongratsOpen}
+        onClose={() => setIsCongratsOpen(false)}
+        type={congratsData?.type || 'quest'}
+        title={congratsData?.title}
+        subtitle={congratsData?.subtitle}
+        bonusXp={congratsData?.bonusXp}
+        badgeName={congratsData?.badgeName}
+        streakCount={congratsData?.streakCount}
+        level={congratsData?.level}
+      />
     </div>
   );
 }

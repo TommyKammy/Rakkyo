@@ -106,6 +106,30 @@ async function main() {
         conditionType: 'STREAK',
         threshold: 3,
       },
+      {
+        name: 'Gritの達人',
+        iconUrl: '🔥',
+        conditionType: 'GRIT',
+        threshold: 90,
+      },
+      {
+        name: '無限の探求者',
+        iconUrl: '⌛',
+        conditionType: 'STUDY_TIME',
+        threshold: 600,
+      },
+      {
+        name: 'ストリークの鬼',
+        iconUrl: '⚡',
+        conditionType: 'STREAK',
+        threshold: 7,
+      },
+      {
+        name: '完璧主義者',
+        iconUrl: '🌟',
+        conditionType: 'CONSECUTIVE_CORRECT',
+        threshold: 10,
+      },
     ],
   });
 
