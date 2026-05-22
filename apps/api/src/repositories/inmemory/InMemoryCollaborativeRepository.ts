@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { CollaborativeRepository } from '../CollaborativeRepository';
 import { inMemoryState } from './state';
 import { allCurriculums } from '@rakkyo/curriculum';
@@ -278,7 +279,7 @@ export class InMemoryCollaborativeRepository implements CollaborativeRepository 
     const boss = inMemoryState.bosses.find(b => b.id === data.bossId);
     if (!boss) throw new Error('Boss not found');
     const battle = {
-      id: 'battle_' + Math.random().toString(36).substr(2, 9),
+      id: 'battle_' + crypto.randomUUID(),
       classId: data.classId,
       bossId: data.bossId,
       currentHp: boss.maxHp,
@@ -298,13 +299,17 @@ export class InMemoryCollaborativeRepository implements CollaborativeRepository 
     damage: number,
     isGrit: boolean
   ): Promise<{ battle: any; justDefeated: boolean }> {
+    // Atomic under Node.js single-thread: no `await` between read and write.
+    // Mirrors the Prisma implementation's "decrement only if alive" +
+    // "claim defeat only if defeatedAt was null" semantics so both
+    // backends behave identically under contention.
     const battle = inMemoryState.bossBattles.find(b => b.id === battleId);
     if (!battle) throw new Error('Battle not found');
 
     let justDefeated = false;
     if (battle.isAlive) {
       battle.currentHp = Math.max(0, battle.currentHp - damage);
-      if (battle.currentHp === 0) {
+      if (battle.currentHp === 0 && battle.defeatedAt === null) {
         battle.isAlive = false;
         battle.defeatedAt = new Date().toISOString();
         justDefeated = true;
@@ -341,41 +346,95 @@ export class InMemoryCollaborativeRepository implements CollaborativeRepository 
     };
   }
 
+  async sumBossBattleDamage(battleId: string): Promise<number> {
+    return inMemoryState.bossBattleParticipants
+      .filter(p => p.battleId === battleId)
+      .reduce((sum, p) => sum + p.totalDamage, 0);
+  }
+
   async findParticipant(userId: string, battleId: string): Promise<any | null> {
     return inMemoryState.bossBattleParticipants.find(
       p => p.userId === userId && p.battleId === battleId
     ) || null;
   }
 
-  async updateCelebrationSeen(userId: string, battleId: string): Promise<void> {
-    const participant = inMemoryState.bossBattleParticipants.find(
+  async upsertCelebrationSeen(userId: string, battleId: string): Promise<any> {
+    let participant = inMemoryState.bossBattleParticipants.find(
       p => p.userId === userId && p.battleId === battleId
     );
-    if (participant) {
-      participant.celebrationSeenAt = new Date().toISOString();
+    const now = new Date().toISOString();
+    if (!participant) {
+      participant = {
+        userId,
+        battleId,
+        totalDamage: 0,
+        gritAttemptsCount: 0,
+        celebrationSeenAt: now,
+        createdAt: now
+      };
+      inMemoryState.bossBattleParticipants.push(participant);
+    } else {
+      participant.celebrationSeenAt = now;
     }
+    return participant;
   }
 
   async findQuestionPool(classId: string): Promise<any | null> {
     return inMemoryState.bossQuestionPools.find(p => p.classId === classId) || null;
   }
 
-  async upsertQuestionPool(classId: string, questionsJson: string): Promise<any> {
-    let pool = inMemoryState.bossQuestionPools.find(p => p.classId === classId);
-    if (!pool) {
-      pool = {
-        id: 'pool_' + Math.random().toString(36).substr(2, 9),
-        classId,
-        questionsJson,
-        lastGeneratedAt: new Date().toISOString(),
-        createdAt: new Date().toISOString()
-      };
-      inMemoryState.bossQuestionPools.push(pool);
-    } else {
-      pool.questionsJson = questionsJson;
-      pool.lastGeneratedAt = new Date().toISOString();
+  async claimQuestionPoolSlot(classId: string, windowMs: number): Promise<{ granted: boolean }> {
+    // Sync block — atomic under Node.js single-thread. No awaits between
+    // the existence check and the slot mutation, so concurrent calls
+    // cannot both observe "no recent generation".
+    const now = new Date();
+    const cutoff = now.getTime() - windowMs;
+    const existing = inMemoryState.bossQuestionPools.find(p => p.classId === classId);
+    if (existing) {
+      if (new Date(existing.lastGeneratedAt).getTime() > cutoff) {
+        return { granted: false };
+      }
+      existing.lastGeneratedAt = now.toISOString();
+      return { granted: true };
     }
+    inMemoryState.bossQuestionPools.push({
+      id: 'pool_' + crypto.randomUUID(),
+      classId,
+      questionsJson: '[]',
+      lastGeneratedAt: now.toISOString(),
+      createdAt: now.toISOString()
+    });
+    return { granted: true };
+  }
+
+  async updateQuestionPoolContent(classId: string, questionsJson: string): Promise<any> {
+    const pool = inMemoryState.bossQuestionPools.find(p => p.classId === classId);
+    if (!pool) throw new Error('Question pool not found — call claimQuestionPoolSlot first');
+    pool.questionsJson = questionsJson;
     return pool;
+  }
+
+  async releaseQuestionPoolSlot(classId: string): Promise<void> {
+    const pool = inMemoryState.bossQuestionPools.find(p => p.classId === classId);
+    if (pool) {
+      pool.lastGeneratedAt = new Date(0).toISOString();
+    }
+  }
+
+  async findClassTenantId(classId: string): Promise<string | null> {
+    const cls = inMemoryState.classes.find(c => c.id === classId);
+    return cls ? cls.tenantId : null;
+  }
+
+  async awardBossDefeatBadge(userId: string): Promise<void> {
+    const user = inMemoryState.users.find(u => u.id === userId);
+    if (!user) return;
+    // Store the canonical (emoji-stripped) badge name; getUserBadges
+    // re-attaches the icon. Idempotent: skip if already present.
+    const cleanName = '魔王撃破の証';
+    if (!user.badges.includes(cleanName)) {
+      user.badges.push(cleanName);
+    }
   }
 
   async createApprovalAudit(data: {
@@ -386,7 +445,7 @@ export class InMemoryCollaborativeRepository implements CollaborativeRepository 
     details: string;
   }): Promise<any> {
     const audit = {
-      id: 'audit_' + Math.random().toString(36).substr(2, 9),
+      id: 'audit_' + crypto.randomUUID(),
       ...data,
       createdAt: new Date().toISOString()
     };

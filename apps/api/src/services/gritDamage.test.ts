@@ -16,9 +16,24 @@ describe('Grit Damage Calculator (P16A-002)', () => {
     expect(calculateGritDamage(5, true, 3)).toBe(12);
   });
 
-  it('should apply grit bonus (hint multiplier) correctly for incorrect answers', () => {
-    // floor(5 * 0.3 * (1 + 5 * 0.2)) = floor(1.5 * 2.0) = floor(3.0) = 3
-    expect(calculateGritDamage(5, false, 5)).toBe(3);
+  it('should apply grit bonus (hint multiplier) correctly for incorrect answers (hintsUsed clamped to MAX=3)', () => {
+    // hintsUsed=5 is clamped to MAX_HINTS_PER_QUESTION=3.
+    // floor(5 * 0.3 * (1 + 3 * 0.2)) = floor(1.5 * 1.6) = floor(2.4) = 2
+    expect(calculateGritDamage(5, false, 5)).toBe(2);
+  });
+
+  it('should clamp astronomically large hintsUsed values to MAX (Phase 16-A CRIT-1)', () => {
+    // Before clamp: floor(5 * 1.5 * (1 + 999999 * 0.2)) = ~1.5M damage (one-shot defeat).
+    // After clamp: floor(5 * 1.5 * (1 + 3 * 0.2)) = floor(12.0) = 12.
+    expect(calculateGritDamage(5, true, 999999)).toBe(12);
+    expect(calculateGritDamage(5, true, Number.MAX_SAFE_INTEGER)).toBe(12);
+  });
+
+  it('should clamp astronomically large difficulty to MAX_DIFFICULTY', () => {
+    // Even if a malicious question pool injects difficulty=10000, the
+    // damage is bounded by MAX_DIFFICULTY=10.
+    // floor(10 * 1.5 * 1.0) = 15
+    expect(calculateGritDamage(10000, true, 0)).toBe(15);
   });
 
   it('should handle boundary difficulty value of 0', () => {

@@ -252,38 +252,41 @@ export class PrismaCollaborativeRepository implements CollaborativeRepository {
     damage: number,
     isGrit: boolean
   ): Promise<{ battle: any; justDefeated: boolean }> {
+    // Atomic damage application without read-then-write of currentHp:
+    // 1. `updateMany` decrement only matches if the battle is still alive,
+    //    so a defeated battle cannot absorb additional damage.
+    // 2. The "I defeated it" claim uses `updateMany` with `defeatedAt: null`
+    //    in the WHERE clause, so exactly one concurrent transaction can
+    //    win the defeat — no lost-update / no double notification.
+    // No retry loop is needed because we never read-then-write the same
+    // field; the conditional `updateMany` is naturally race-safe.
     return prisma.$transaction(async tx => {
-      const battle = await tx.bossBattle.findUnique({
-        where: { id: battleId }
+      // Step 1: atomic decrement (only if still alive)
+      const decremented = await tx.bossBattle.updateMany({
+        where: { id: battleId, isAlive: true },
+        data: { currentHp: { decrement: damage } }
       });
-      if (!battle) throw new Error('Battle not found');
 
       let justDefeated = false;
-      let updatedBattle = battle;
-
-      if (battle.isAlive) {
-        const newHp = Math.max(0, battle.currentHp - damage);
-        const defeatedNow = newHp === 0;
-
-        updatedBattle = await tx.bossBattle.update({
-          where: { id: battleId },
-          data: {
-            currentHp: newHp,
-            isAlive: !defeatedNow,
-            defeatedAt: defeatedNow ? new Date() : null
-          },
-          include: { boss: true }
-        });
-
-        if (defeatedNow) {
-          justDefeated = true;
+      if (decremented.count === 1) {
+        // Read the new HP to decide if this attack toppled the boss.
+        const afterAttack = await tx.bossBattle.findUnique({ where: { id: battleId } });
+        if (afterAttack && afterAttack.currentHp <= 0) {
+          // Single-writer defeat claim — only one tx wins.
+          const claim = await tx.bossBattle.updateMany({
+            where: { id: battleId, defeatedAt: null },
+            data: { defeatedAt: new Date(), isAlive: false, currentHp: 0 }
+          });
+          if (claim.count === 1) {
+            justDefeated = true;
+          }
         }
       }
 
+      // Always record participant contribution, even after defeat,
+      // so late attacks still see their effort logged.
       await tx.bossBattleParticipant.upsert({
-        where: {
-          userId_battleId: { userId, battleId }
-        },
+        where: { userId_battleId: { userId, battleId } },
         create: {
           userId,
           battleId,
@@ -296,13 +299,20 @@ export class PrismaCollaborativeRepository implements CollaborativeRepository {
         }
       });
 
-      return {
-        battle: updatedBattle,
-        justDefeated
-      };
-    }, {
-      isolationLevel: 'Serializable'
+      const battle = await tx.bossBattle.findUnique({
+        where: { id: battleId },
+        include: { boss: true }
+      });
+      return { battle, justDefeated };
     });
+  }
+
+  async sumBossBattleDamage(battleId: string): Promise<number> {
+    const result = await prisma.bossBattleParticipant.aggregate({
+      where: { battleId },
+      _sum: { totalDamage: true }
+    });
+    return result._sum.totalDamage || 0;
   }
 
   async findParticipant(userId: string, battleId: string): Promise<any | null> {
@@ -313,12 +323,17 @@ export class PrismaCollaborativeRepository implements CollaborativeRepository {
     });
   }
 
-  async updateCelebrationSeen(userId: string, battleId: string): Promise<void> {
-    await prisma.bossBattleParticipant.update({
-      where: {
-        userId_battleId: { userId, battleId }
+  async upsertCelebrationSeen(userId: string, battleId: string): Promise<any> {
+    return prisma.bossBattleParticipant.upsert({
+      where: { userId_battleId: { userId, battleId } },
+      create: {
+        userId,
+        battleId,
+        totalDamage: 0,
+        gritAttemptsCount: 0,
+        celebrationSeenAt: new Date()
       },
-      data: {
+      update: {
         celebrationSeenAt: new Date()
       }
     });
@@ -330,19 +345,77 @@ export class PrismaCollaborativeRepository implements CollaborativeRepository {
     });
   }
 
-  async upsertQuestionPool(classId: string, questionsJson: string): Promise<any> {
-    return prisma.bossQuestionPool.upsert({
-      where: { classId },
-      create: {
-        classId,
-        questionsJson,
-        lastGeneratedAt: new Date()
-      },
-      update: {
-        questionsJson,
-        lastGeneratedAt: new Date()
+  async claimQuestionPoolSlot(classId: string, windowMs: number): Promise<{ granted: boolean }> {
+    // Single-writer claim. The atomicity comes from the `BossQuestionPool.classId`
+    // unique constraint: only one INSERT or matching UPDATE wins per window.
+    const cutoff = new Date(Date.now() - windowMs);
+    return prisma.$transaction(async tx => {
+      const existing = await tx.bossQuestionPool.findUnique({ where: { classId } });
+      if (existing) {
+        if (existing.lastGeneratedAt > cutoff) {
+          return { granted: false };
+        }
+        const updated = await tx.bossQuestionPool.updateMany({
+          where: { classId, lastGeneratedAt: { lt: cutoff } },
+          data: { lastGeneratedAt: new Date() }
+        });
+        return { granted: updated.count === 1 };
       }
+      try {
+        await tx.bossQuestionPool.create({
+          data: { classId, questionsJson: '[]', lastGeneratedAt: new Date() }
+        });
+        return { granted: true };
+      } catch {
+        // Another tx beat us to the unique-constraint insert.
+        return { granted: false };
+      }
+    }, { isolationLevel: 'Serializable' });
+  }
+
+  async updateQuestionPoolContent(classId: string, questionsJson: string): Promise<any> {
+    return prisma.bossQuestionPool.update({
+      where: { classId },
+      data: { questionsJson }
     });
+  }
+
+  async releaseQuestionPoolSlot(classId: string): Promise<void> {
+    // Roll back to a "far past" timestamp so a retry is allowed.
+    await prisma.bossQuestionPool.updateMany({
+      where: { classId },
+      data: { lastGeneratedAt: new Date(0) }
+    });
+  }
+
+  async findClassTenantId(classId: string): Promise<string | null> {
+    const cls = await prisma.class.findUnique({
+      where: { id: classId },
+      select: { tenantId: true }
+    });
+    return cls?.tenantId ?? null;
+  }
+
+  async awardBossDefeatBadge(userId: string): Promise<void> {
+    // Ensure the Badge row exists, then idempotently link to user.
+    const badge = await prisma.badge.upsert({
+      where: { id: 'boss_defeat_badge' },
+      create: {
+        id: 'boss_defeat_badge',
+        name: '魔王撃破の証',
+        iconUrl: '🏆',
+        conditionType: 'BOSS_DEFEAT',
+        threshold: 1
+      },
+      update: {}
+    });
+    try {
+      await prisma.userBadge.create({
+        data: { userId, badgeId: badge.id }
+      });
+    } catch {
+      // Composite PK violation = badge already awarded. Silently ignore.
+    }
   }
 
   async createApprovalAudit(data: {

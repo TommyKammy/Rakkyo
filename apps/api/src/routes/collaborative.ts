@@ -5,8 +5,9 @@ import { authMiddleware, AuthenticatedRequest } from '../middlewares/auth';
 import { requireSecret } from '../utils/secrets';
 import { recordAbuseStrike } from '../utils/abuseTracker';
 import { SafetyFilter, AiTutorProviderFactory, BossQuestion } from '@rakkyo/ai-tutor';
-import { calculateGritDamage } from '../services/gritDamage';
-import prisma from '../db';
+import { calculateGritDamage, MAX_HINTS_PER_QUESTION } from '../services/gritDamage';
+
+const POOL_GENERATION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 1 week
 
 const router = Router();
 
@@ -532,21 +533,7 @@ router.get('/boss/active', authMiddleware, async (req: AuthenticatedRequest, res
     }
 
     const participant = await repos.collaborative.findParticipant(userId, battle.id);
-
-    // Calculate total class damage safely across database and mock configurations (SOC)
-    let totalClassDamage = 0;
-    if (repos.collaborative.constructor.name === 'PrismaCollaborativeRepository') {
-      const sumResult = await prisma.bossBattleParticipant.aggregate({
-        where: { battleId: battle.id },
-        _sum: { totalDamage: true }
-      });
-      totalClassDamage = sumResult._sum.totalDamage || 0;
-    } else {
-      const { inMemoryState } = require('../repositories/inmemory/state');
-      totalClassDamage = inMemoryState.bossBattleParticipants
-        .filter((p: any) => p.battleId === battle.id)
-        .reduce((sum: number, p: any) => sum + p.totalDamage, 0);
-    }
+    const totalClassDamage = await repos.collaborative.sumBossBattleDamage(battle.id);
 
     res.json({
       battle: {
@@ -624,9 +611,11 @@ router.post('/boss/attack', authMiddleware, async (req: AuthenticatedRequest, re
     const repos = req.repos!;
 
     const attackSchema = z.object({
-      questionId: z.string(),
+      questionId: z.string().max(64),
       answerSubmitted: z.string().max(100),
-      hintsUsed: z.number().int().nonnegative()
+      // Clamped to MAX_HINTS_PER_QUESTION at the Zod boundary;
+      // calculateGritDamage also clamps server-side as defence-in-depth.
+      hintsUsed: z.number().int().min(0).max(MAX_HINTS_PER_QUESTION)
     });
 
     const { questionId, answerSubmitted, hintsUsed } = attackSchema.parse(req.body);
@@ -663,7 +652,7 @@ router.post('/boss/attack', authMiddleware, async (req: AuthenticatedRequest, re
     const cleanAnswer = answerSubmitted.trim().toLowerCase();
     const isCorrect = question.answers.some(ans => ans.trim().toLowerCase() === cleanAnswer);
 
-    // P16A-002: Grit Damage Engine
+    // P16A-002: Grit Damage Engine (clamped server-side)
     const damage = calculateGritDamage(question.difficulty, isCorrect, hintsUsed);
 
     // A-1: Atomic damage processing
@@ -675,23 +664,11 @@ router.post('/boss/attack', authMiddleware, async (req: AuthenticatedRequest, re
       isGrit
     );
 
-    // A-6: Award badge on defeat idempotently via upsert/try-catch
+    // A-6: Award badge on defeat idempotently. The repository takes care
+    // of both Prisma (Badge + UserBadge tables) and InMemory (User.badges
+    // string array) with equivalent semantics.
     if (justDefeated) {
-      if (repos.collaborative.constructor.name === 'PrismaCollaborativeRepository') {
-        const prismaInstance = require('../../db').default;
-        await prismaInstance.badge.upsert({
-          where: { id: 'boss_defeat_badge' },
-          create: {
-            id: 'boss_defeat_badge',
-            name: '魔王撃破の証',
-            iconUrl: '🏆',
-            conditionType: 'BOSS_DEFEAT',
-            threshold: 1
-          },
-          update: {}
-        });
-      }
-      await repos.attempts.addUserBadge(userId, '🏆 魔王撃破の証');
+      await repos.collaborative.awardBossDefeatBadge(userId);
     }
 
     res.json({
@@ -703,36 +680,42 @@ router.post('/boss/attack', authMiddleware, async (req: AuthenticatedRequest, re
       justDefeated
     });
   } catch (e: any) {
+    if (e instanceof z.ZodError) {
+      return res.status(400).json({ error: e.errors });
+    }
     res.status(500).json({ error: e.message });
   }
 });
 
 // 14. POST /boss/celebration/seen - Mark celebration scene as viewed (Student)
+// Spec A-7: even classmates who never attacked the boss (they logged in
+// after defeat) must be able to see — and dismiss — the celebration once.
+// `upsertCelebrationSeen` therefore creates a zero-damage participant row
+// when one does not yet exist.
 router.post('/boss/celebration/seen', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.userId!;
     const repos = req.repos!;
 
     const schema = z.object({
-      battleId: z.string()
+      battleId: z.string().max(64)
     });
 
     const { battleId } = schema.parse(req.body);
-
-    const participant = await repos.collaborative.findParticipant(userId, battleId);
-    if (!participant) {
-      return res.status(404).json({ error: 'ボスバトルの参加実績が見つかりません' });
-    }
-
-    await repos.collaborative.updateCelebrationSeen(userId, battleId);
+    await repos.collaborative.upsertCelebrationSeen(userId, battleId);
 
     res.json({ success: true });
   } catch (e: any) {
+    if (e instanceof z.ZodError) {
+      return res.status(400).json({ error: e.errors });
+    }
     res.status(500).json({ error: e.message });
   }
 });
 
 // 15. POST /boss/pool/generate - Generate boss battle question pool dynamically (Teacher)
+// Hardened against A-3 (cross-tenant) and A-2 (cost-amplification TOCTOU)
+// from the Phase 16-A quality notes.
 router.post('/boss/pool/generate', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.userId!;
@@ -745,38 +728,53 @@ router.post('/boss/pool/generate', authMiddleware, async (req: AuthenticatedRequ
     }
 
     const schema = z.object({
-      classId: z.string(),
+      classId: z.string().max(64),
       attribute: z.string().min(1).max(100)
     });
 
     const { classId, attribute } = schema.parse(req.body);
 
-    // Cross-tenant verification: Enrolled Class check (A-3)
+    // Cross-tenant verification (A-3, parity with /boss/pool/approve):
+    // (a) requester is enrolled as TEACHER in the target class AND
+    // (b) class.tenantId matches the requester's tenant.
     const enrollments = await repos.users.findEnrollmentsByClass(classId, 'TEACHER');
     const isEnrolled = enrollments.some(e => e.userId === userId);
     if (!isEnrolled) {
       return res.status(403).json({ error: 'クラスの担当教師ではありません（クロステナント拒絶）' });
     }
-
-    // Cost reduction weekly limit (A-2)
-    const existingPool = await repos.collaborative.findQuestionPool(classId);
-    if (existingPool) {
-      const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-      if (new Date(existingPool.lastGeneratedAt).getTime() > oneWeekAgo) {
-        return res.status(429).json({ error: 'AI問題プール生成は週に1回のみ可能です' });
-      }
+    const classTenantId = await repos.collaborative.findClassTenantId(classId);
+    if (!classTenantId || classTenantId !== req.tenantId) {
+      return res.status(403).json({ error: 'テナントが一致しません（クロステナント拒絶）' });
     }
 
-    const provider = AiTutorProviderFactory.getProvider();
-    const { questions } = await provider.generateBossQuestionPool(attribute, 1);
+    // A-2 cost guard: atomically claim the weekly slot BEFORE calling
+    // the AI provider. Concurrent requests in the same window get
+    // `granted=false` here and never reach Gemini.
+    const { granted } = await repos.collaborative.claimQuestionPoolSlot(
+      classId,
+      POOL_GENERATION_WINDOW_MS
+    );
+    if (!granted) {
+      return res.status(429).json({ error: 'AI問題プール生成は週に1回のみ可能です' });
+    }
 
-    await repos.collaborative.upsertQuestionPool(classId, JSON.stringify(questions));
+    let questions: BossQuestion[];
+    try {
+      const provider = AiTutorProviderFactory.getProvider();
+      const result = await provider.generateBossQuestionPool(attribute, 1);
+      questions = result.questions;
+    } catch (genError) {
+      // Roll the slot back so the teacher can retry without waiting a week
+      // when the AI provider failed transiently.
+      await repos.collaborative.releaseQuestionPoolSlot(classId);
+      throw genError;
+    }
 
-    // Log the audit
-    const tenantId = teacherEnrollment.class.tenantId;
+    await repos.collaborative.updateQuestionPoolContent(classId, JSON.stringify(questions));
+
     await repos.collaborative.createApprovalAudit({
       userId,
-      tenantId,
+      tenantId: classTenantId,
       action: 'GENERATE_POOL',
       targetId: classId,
       details: `ボスの属性「${attribute}」の問題プールを生成しました`
@@ -787,6 +785,9 @@ router.post('/boss/pool/generate', authMiddleware, async (req: AuthenticatedRequ
       questionsCount: questions.length
     });
   } catch (e: any) {
+    if (e instanceof z.ZodError) {
+      return res.status(400).json({ error: e.errors });
+    }
     res.status(500).json({ error: e.message });
   }
 });
@@ -803,35 +804,22 @@ router.post('/boss/pool/approve', authMiddleware, async (req: AuthenticatedReque
     }
 
     const schema = z.object({
-      classId: z.string(),
-      bossId: z.string(),
-      startsAt: z.string(),
-      endsAt: z.string()
+      classId: z.string().max(64),
+      bossId: z.string().max(64),
+      startsAt: z.string().datetime(),
+      endsAt: z.string().datetime()
     });
 
     const { classId, bossId, startsAt, endsAt } = schema.parse(req.body);
 
-    // Cross-tenant verification (A-3)
+    // Cross-tenant verification (A-3): both enrollment AND tenant match.
     const enrollments = await repos.users.findEnrollmentsByClass(classId, 'TEACHER');
     const isEnrolled = enrollments.some(e => e.userId === userId);
     if (!isEnrolled) {
       return res.status(403).json({ error: 'クラスの担当教師ではありません（クロステナント拒絶）' });
     }
-
-    let classTenantId = '';
-    if (repos.collaborative.constructor.name === 'PrismaCollaborativeRepository') {
-      const prismaInstance = require('../../db').default;
-      const cls = await prismaInstance.class.findUnique({
-        where: { id: classId }
-      });
-      classTenantId = cls ? cls.tenantId : '';
-    } else {
-      const { inMemoryState } = require('../repositories/inmemory/state');
-      const cls = inMemoryState.classes.find((c: any) => c.id === classId);
-      classTenantId = cls ? cls.tenantId : '';
-    }
-
-    if (classTenantId !== req.tenantId) {
+    const classTenantId = await repos.collaborative.findClassTenantId(classId);
+    if (!classTenantId || classTenantId !== req.tenantId) {
       return res.status(403).json({ error: 'テナントが一致しません（クロステナント拒絶）' });
     }
 
@@ -842,7 +830,6 @@ router.post('/boss/pool/approve', authMiddleware, async (req: AuthenticatedReque
       endsAt: new Date(endsAt)
     });
 
-    // Log the audit
     await repos.collaborative.createApprovalAudit({
       userId,
       tenantId: req.tenantId!,
@@ -856,6 +843,9 @@ router.post('/boss/pool/approve', authMiddleware, async (req: AuthenticatedReque
       battleId: battle.id
     });
   } catch (e: any) {
+    if (e instanceof z.ZodError) {
+      return res.status(400).json({ error: e.errors });
+    }
     res.status(500).json({ error: e.message });
   }
 });

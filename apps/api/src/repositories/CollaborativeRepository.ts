@@ -71,10 +71,29 @@ export interface CollaborativeRepository {
     damage: number,
     isGrit: boolean
   ): Promise<{ battle: any; justDefeated: boolean }>;
+  /** Sum of all participants' totalDamage for the battle. */
+  sumBossBattleDamage(battleId: string): Promise<number>;
   findParticipant(userId: string, battleId: string): Promise<any | null>;
-  updateCelebrationSeen(userId: string, battleId: string): Promise<void>;
+  /**
+   * Mark celebration as seen — even for a student who never landed an
+   * attack (they joined the room after the boss was already defeated).
+   * Returns the resulting participant row.
+   */
+  upsertCelebrationSeen(userId: string, battleId: string): Promise<any>;
   findQuestionPool(classId: string): Promise<any | null>;
-  upsertQuestionPool(classId: string, questionsJson: string): Promise<any>;
+  /**
+   * Atomic single-writer claim on the weekly generation slot.
+   * Returns granted=true exactly once per window, even under concurrent
+   * teacher requests.
+   */
+  claimQuestionPoolSlot(classId: string, windowMs: number): Promise<{ granted: boolean }>;
+  /** Replace the cached questions on a previously-claimed slot. */
+  updateQuestionPoolContent(classId: string, questionsJson: string): Promise<any>;
+  /** Roll back a claimed slot when downstream (e.g. Gemini) failed. */
+  releaseQuestionPoolSlot(classId: string): Promise<void>;
+  findClassTenantId(classId: string): Promise<string | null>;
+  /** Idempotent badge award for boss defeat — works on both Prisma and InMemory backends. */
+  awardBossDefeatBadge(userId: string): Promise<void>;
   createApprovalAudit(data: {
     userId: string;
     tenantId: string;
