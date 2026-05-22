@@ -132,6 +132,55 @@ export interface SafetyAlertMock {
   sentAt: string | null;
 }
 
+// Phase-16-A: Boss Battle Mock Interfaces
+export interface BossMock {
+  id: string;
+  name: string;
+  maxHp: number;
+  attribute: string;
+  durationWeeks: number;
+  createdAt: string;
+}
+
+export interface BossBattleMock {
+  id: string;
+  classId: string;
+  bossId: string;
+  currentHp: number;
+  startsAt: string;
+  endsAt: string;
+  defeatedAt: string | null;
+  isAlive: boolean;
+  createdAt: string;
+}
+
+export interface BossBattleParticipantMock {
+  userId: string;
+  battleId: string;
+  totalDamage: number;
+  gritAttemptsCount: number;
+  celebrationSeenAt: string | null;
+  createdAt: string;
+}
+
+export interface BossQuestionPoolMock {
+  id: string;
+  classId: string;
+  questionsJson: string;
+  lastGeneratedAt: string;
+  createdAt: string;
+}
+
+export interface BossApprovalAuditMock {
+  id: string;
+  userId: string;
+  tenantId: string;
+  action: string;
+  targetId: string;
+  details: string;
+  createdAt: string;
+}
+
 class InMemoryState {
   tenants: TenantMock[] = [];
   users: UserMock[] = [];
@@ -147,6 +196,13 @@ class InMemoryState {
   classMissions: ClassMissionMock[] = [];
   parentalCelebrations: ParentalCelebrationMock[] = [];
   safetyAlerts: SafetyAlertMock[] = [];
+
+  // Phase-16-A: Boss Battle Mock Arrays
+  bosses: BossMock[] = [];
+  bossBattles: BossBattleMock[] = [];
+  bossBattleParticipants: BossBattleParticipantMock[] = [];
+  bossQuestionPools: BossQuestionPoolMock[] = [];
+  bossApprovalAudits: BossApprovalAuditMock[] = [];
 
   constructor() {
     this.seed();
@@ -167,6 +223,14 @@ class InMemoryState {
     this.classMissions = [];
     this.parentalCelebrations = [];
     this.safetyAlerts = [];
+
+    // Phase-16-A Reset
+    this.bosses = [];
+    this.bossBattles = [];
+    this.bossBattleParticipants = [];
+    this.bossQuestionPools = [];
+    this.bossApprovalAudits = [];
+
     this.seed();
   }
 

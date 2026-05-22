@@ -145,6 +145,8 @@ export class InMemoryUserRepository implements UserRepository {
     // GDPR-K compliant cascade — must mirror PrismaUserRepository.deleteUserData
     // including any newly-added user-linked tables. When adding a new table
     // that holds a userId, ALSO add a filter here.
+    inMemoryState.bossBattleParticipants = inMemoryState.bossBattleParticipants.filter(p => p.userId !== userId);
+    inMemoryState.bossApprovalAudits = inMemoryState.bossApprovalAudits.filter(a => a.userId !== userId);
     inMemoryState.parentalCelebrations = inMemoryState.parentalCelebrations.filter(c => c.childId !== userId);
     inMemoryState.attempts = inMemoryState.attempts.filter(a => a.userId !== userId);
     inMemoryState.parentMessages = inMemoryState.parentMessages.filter(m => m.userId !== userId);

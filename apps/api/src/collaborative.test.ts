@@ -8,6 +8,8 @@ const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'rakkyo-super-secret-key-12345
 describe('Phase-12 Collaborative Learning and Peer Support Integration Tests', () => {
   let token: string;
   let otherToken: string;
+  let teacherToken: string;
+  let otherTenantTeacherToken: string;
   let generatedToken: string;
 
   beforeAll(() => {
@@ -21,6 +23,50 @@ describe('Phase-12 Collaborative Learning and Peer Support Integration Tests', (
       { userId: 'user_presence_0', tenantId: 'test-tenant-id', role: 'STUDENT' },
       JWT_SECRET
     );
+    // Generate teacher tokens
+    teacherToken = jwt.sign(
+      { userId: 'test-teacher-id', tenantId: 'test-tenant-id', role: 'TEACHER' },
+      JWT_SECRET
+    );
+    otherTenantTeacherToken = jwt.sign(
+      { userId: 'other-teacher-id', tenantId: 'other-tenant-id', role: 'TEACHER' },
+      JWT_SECRET
+    );
+
+    // Register foreign tenant entities in inMemoryState for cross-tenant authorization testing
+    inMemoryState.users.push({
+      id: 'other-teacher-id',
+      tenantId: 'other-tenant-id',
+      email: 'other-teacher@rakkyo.com',
+      passwordHash: 'dummy',
+      nickname: '他テナント先生',
+      role: 'TEACHER',
+      schoolYear: 1,
+      currentXp: 0,
+      level: 1,
+      streakCount: 0,
+      lastActiveDate: null,
+      parentalConsent: false,
+      aiHintCountToday: 0,
+      lastAiHintDate: null,
+      abuseCount: 0,
+      abuseLastAt: null,
+      lockedUntil: null,
+      badges: [],
+      createdAt: new Date().toISOString()
+    });
+    inMemoryState.classes.push({
+      id: 'other-class-id',
+      tenantId: 'other-tenant-id',
+      name: '他テナントクラス',
+      grade: 1
+    });
+    inMemoryState.classEnrollments.push({
+      id: 'enroll_other_teacher',
+      classId: 'other-class-id',
+      userId: 'other-teacher-id',
+      role: 'TEACHER'
+    });
   });
 
   describe('1. Virtual Study Room (GET /api/collaborative/room)', () => {
@@ -563,8 +609,406 @@ describe('Phase-12 Collaborative Learning and Peer Support Integration Tests', (
     });
   });
 
+  describe('5.7 Phase-16-A Boss Battle Integration Tests', () => {
+    let bossId = 'test-boss-id';
+    let battleId = 'test-battle-id';
+
+    beforeAll(() => {
+      // Seed a Boss in state
+      inMemoryState.bosses.push({
+        id: bossId,
+        name: '数式魔王',
+        maxHp: 1000,
+        attribute: 'EQUATIONS',
+        durationWeeks: 1,
+        createdAt: new Date().toISOString()
+      });
+      // Seed a question pool in state
+      inMemoryState.bossQuestionPools.push({
+        id: 'test-pool-id',
+        classId: 'test-class-id',
+        questionsJson: JSON.stringify([
+          {
+            id: 'bq_1',
+            prompt: '問1: $x - 1 = 2$ を計算しなさい。',
+            answers: ['3'],
+            options: [],
+            explanation: '解説文',
+            hints: ['ヒント1', 'ヒント2'],
+            difficulty: 1
+          }
+        ]),
+        lastGeneratedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(), // 10 days ago (allows immediate generation)
+        createdAt: new Date().toISOString()
+      });
+    });
+
+    it('should enforce weekly limit of AI question pool generation (429 Too Many Requests)', async () => {
+      // 1st generation - should succeed
+      const res1 = await request(app)
+        .post('/api/collaborative/boss/pool/generate')
+        .set('Authorization', `Bearer ${teacherToken}`)
+        .send({
+          classId: 'test-class-id',
+          attribute: 'EQUATIONS'
+        });
+      
+      expect(res1.status).toBe(200);
+      expect(res1.body).toHaveProperty('success', true);
+
+      // 2nd generation - should be blocked with 429
+      const res2 = await request(app)
+        .post('/api/collaborative/boss/pool/generate')
+        .set('Authorization', `Bearer ${teacherToken}`)
+        .send({
+          classId: 'test-class-id',
+          attribute: 'EQUATIONS'
+        });
+
+      expect(res2.status).toBe(429);
+      expect(res2.body.error).toContain('AI問題プール生成は週に1回のみ可能です');
+    });
+
+    it('should reject battle approval from unauthorized or foreign tenant teachers (403 Forbidden)', async () => {
+      const startsAt = new Date().toISOString();
+      const endsAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+      // 1. Foreign tenant teacher
+      const res1 = await request(app)
+        .post('/api/collaborative/boss/pool/approve')
+        .set('Authorization', `Bearer ${otherTenantTeacherToken}`)
+        .send({
+          classId: 'test-class-id', // target class belongs to test-tenant-id
+          bossId,
+          startsAt,
+          endsAt
+        });
+      
+      expect(res1.status).toBe(403);
+      expect(res1.body.error).toContain('クロステナント拒絶');
+
+      // 2. Teacher from same tenant but not enrolled in class
+      const sameTenantTeacherToken = jwt.sign(
+        { userId: 'not-enrolled-teacher-id', tenantId: 'test-tenant-id', role: 'TEACHER' },
+        JWT_SECRET
+      );
+      inMemoryState.users.push({
+        id: 'not-enrolled-teacher-id',
+        tenantId: 'test-tenant-id',
+        email: 'not-enrolled@rakkyo.com',
+        passwordHash: 'dummy',
+        nickname: '無関係先生',
+        role: 'TEACHER',
+        schoolYear: 1,
+        currentXp: 0,
+        level: 1,
+        streakCount: 0,
+        lastActiveDate: null,
+        parentalConsent: false,
+        aiHintCountToday: 0,
+        lastAiHintDate: null,
+        abuseCount: 0,
+        abuseLastAt: null,
+        lockedUntil: null,
+        badges: [],
+        createdAt: new Date().toISOString()
+      });
+      inMemoryState.classes.push({
+        id: 'dummy-other-class-id',
+        tenantId: 'test-tenant-id',
+        name: 'ダミー他クラス',
+        grade: 1
+      });
+      inMemoryState.classEnrollments.push({
+        id: 'enroll-unrelated-teacher',
+        classId: 'dummy-other-class-id',
+        userId: 'not-enrolled-teacher-id',
+        role: 'TEACHER'
+      });
+
+      const res2 = await request(app)
+        .post('/api/collaborative/boss/pool/approve')
+        .set('Authorization', `Bearer ${sameTenantTeacherToken}`)
+        .send({
+          classId: 'test-class-id',
+          bossId,
+          startsAt,
+          endsAt
+        });
+      
+      expect(res2.status).toBe(403);
+      expect(res2.body.error).toContain('担当教師ではありません');
+    });
+
+    it('should successfully approve and create a boss battle, logging the audit record', async () => {
+      const startsAt = new Date(Date.now() - 10000).toISOString(); // starts slightly in past to be active
+      const endsAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+      const res = await request(app)
+        .post('/api/collaborative/boss/pool/approve')
+        .set('Authorization', `Bearer ${teacherToken}`)
+        .send({
+          classId: 'test-class-id',
+          bossId,
+          startsAt,
+          endsAt
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('success', true);
+      expect(res.body).toHaveProperty('battleId');
+      battleId = res.body.battleId;
+
+      // Verify audit log exists
+      const audit = inMemoryState.bossApprovalAudits.find(a => a.targetId === battleId);
+      expect(audit).toBeDefined();
+      expect(audit?.action).toBe('APPROVE_BATTLE');
+      expect(audit?.userId).toBe('test-teacher-id');
+    });
+
+    it('should completely hide other classmates individual damage stats from student active view (A-4)', async () => {
+      const res = await request(app)
+        .get('/api/collaborative/boss/active')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('battle');
+      expect(res.body.battle).toHaveProperty('currentHp');
+      expect(res.body.battle).toHaveProperty('totalClassDamage');
+      expect(res.body).toHaveProperty('participant');
+
+      // Crucial Security Verification: Ensure NO other individual participants' detail list is exposed in response
+      const keys = Object.keys(res.body);
+      expect(keys).toContain('battle');
+      expect(keys).toContain('participant');
+      expect(keys.length).toBe(2); // strictly battle and participant only!
+      
+      const battleKeys = Object.keys(res.body.battle);
+      expect(battleKeys).not.toContain('participants'); // no individual arrays!
+    });
+
+    it('should respect the startsAt/endsAt active battle time window (Fake Timers Boundary Verification)', async () => {
+      jest.useFakeTimers();
+      
+      // Look up active battle to get exact bounds
+      const battle = inMemoryState.bossBattles.find(b => b.id === battleId);
+      expect(battle).toBeDefined();
+
+      // 1. Set time BEFORE startsAt
+      jest.setSystemTime(new Date(battle!.startsAt).getTime() - 5000);
+      const resBefore = await request(app)
+        .post('/api/collaborative/boss/attack')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          questionId: 'bq_1',
+          answerSubmitted: '-2x',
+          hintsUsed: 0
+        });
+      expect(resBefore.status).toBe(400);
+      expect(resBefore.body.error).toMatch(/制限時間外です|アクティブなボスバトルがありません/);
+
+      // 2. Set time DURING active window
+      jest.setSystemTime(new Date(battle!.startsAt).getTime() + 5000);
+      const resActive = await request(app)
+        .post('/api/collaborative/boss/attack')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          questionId: 'bq_1',
+          answerSubmitted: '-2x',
+          hintsUsed: 0
+        });
+      expect(resActive.status).toBe(200);
+      expect(resActive.body.isCorrect).toBe(true);
+
+      // 3. Set time AFTER endsAt
+      jest.setSystemTime(new Date(battle!.endsAt).getTime() + 5000);
+      const resAfter = await request(app)
+        .post('/api/collaborative/boss/attack')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          questionId: 'bq_1',
+          answerSubmitted: '-2x',
+          hintsUsed: 0
+        });
+      expect(resAfter.status).toBe(400);
+      expect(resAfter.body.error).toMatch(/制限時間外です|アクティブなボスバトルがありません/);
+
+      jest.useRealTimers();
+    });
+
+    it('should process parallel attacks atomically, ensuring no Lost Updates and exactly one justDefeated winner', async () => {
+      // Deactivate all previous battles first so our weak battle is the only active one!
+      inMemoryState.bossBattles.forEach(b => {
+        b.isAlive = false;
+        b.endsAt = new Date(Date.now() - 100000).toISOString();
+      });
+
+      // 1. Create a specific fresh boss with exactly 1 HP
+      const weakBossId = 'weak-boss-id';
+      const weakBattleId = 'weak-battle-id';
+      
+      inMemoryState.bosses.push({
+        id: weakBossId,
+        name: '瀕死のボス',
+        maxHp: 100,
+        attribute: 'EQUATIONS',
+        durationWeeks: 1,
+        createdAt: new Date().toISOString()
+      });
+
+      inMemoryState.bossBattles.push({
+        id: weakBattleId,
+        classId: 'test-class-id',
+        bossId: weakBossId,
+        currentHp: 1, // Only 1 HP left!
+        startsAt: new Date(Date.now() - 10000).toISOString(),
+        endsAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        defeatedAt: null,
+        isAlive: true,
+        createdAt: new Date().toISOString()
+      });
+
+      // 2. Generate 16 parallel student attacks concurrently
+      const parallelStudentsCount = 16;
+      const attackPromises = [];
+
+      for (let i = 0; i < parallelStudentsCount; i++) {
+        const studentId = `parallel-student-${i}`;
+        const studentToken = jwt.sign(
+          { userId: studentId, tenantId: 'test-tenant-id', role: 'STUDENT' },
+          JWT_SECRET
+        );
+
+        // Register student mock in memory state
+        inMemoryState.users.push({
+          id: studentId,
+          tenantId: 'test-tenant-id',
+          email: `${studentId}@rakkyo.com`,
+          passwordHash: 'dummy',
+          nickname: `戦士 #${i}`,
+          role: 'STUDENT',
+          schoolYear: 1,
+          currentXp: 100,
+          level: 2,
+          streakCount: 1,
+          lastActiveDate: new Date().toISOString(),
+          parentalConsent: true,
+          aiHintCountToday: 0,
+          lastAiHintDate: null,
+          abuseCount: 0,
+          abuseLastAt: null,
+          lockedUntil: null,
+          badges: [],
+          createdAt: new Date().toISOString()
+        });
+
+        inMemoryState.classEnrollments.push({
+          id: `enroll-parallel-${i}`,
+          classId: 'test-class-id',
+          userId: studentId,
+          role: 'STUDENT'
+        });
+
+        // Fire request
+        attackPromises.push(
+          request(app)
+            .post('/api/collaborative/boss/attack')
+            .set('Authorization', `Bearer ${studentToken}`)
+            .send({
+              questionId: 'bq_1',
+              answerSubmitted: '-2x',
+              hintsUsed: 1
+            })
+        );
+      }
+
+      // Execute all 16 attacks in parallel
+      const results = await Promise.all(attackPromises);
+
+      // Verify that all returned 200 OK
+      results.forEach(res => {
+        expect(res.status).toBe(200);
+      });
+
+      // Assert Atomic Execution:
+      // Exactly ONE request must get justDefeated: true
+      const defeatWinners = results.filter(res => res.body.justDefeated === true);
+      expect(defeatWinners.length).toBe(1);
+
+      // The rest must get justDefeated: false
+      const defeatLosers = results.filter(res => res.body.justDefeated === false);
+      expect(defeatLosers.length).toBe(parallelStudentsCount - 1);
+
+      // Verify Boss state: Hp must be <= 0, isAlive must be false
+      const finalBattleState = inMemoryState.bossBattles.find(b => b.id === weakBattleId);
+      expect(finalBattleState).toBeDefined();
+      expect(finalBattleState?.currentHp).toBeLessThanOrEqual(0);
+      expect(finalBattleState?.isAlive).toBe(false);
+      expect(finalBattleState?.defeatedAt).not.toBeNull();
+    });
+
+    it('should idempotently award victory badges and handle celebration read states', async () => {
+      // 1. Test idempotent badge award (A-6)
+      const winningParticipant = inMemoryState.bossBattleParticipants.find(p => p.battleId === 'weak-battle-id' && p.totalDamage > 0);
+      expect(winningParticipant).toBeDefined();
+      
+      const winnerId = winningParticipant!.userId;
+      const winnerUser = inMemoryState.users.find(u => u.id === winnerId);
+      expect(winnerUser?.badges).toContain('魔王撃破の証');
+
+      // 2. Celebration Seen State idempotency (A-7)
+      const studentToken = jwt.sign(
+        { userId: winnerId, tenantId: 'test-tenant-id', role: 'STUDENT' },
+        JWT_SECRET
+      );
+
+      const activeRes1 = await request(app)
+        .get('/api/collaborative/boss/active')
+        .set('Authorization', `Bearer ${studentToken}`);
+      
+      expect(activeRes1.status).toBe(200);
+      expect(activeRes1.body.participant.celebrationSeenAt).toBeNull();
+
+      // Submit seen state confirmation
+      const seenRes = await request(app)
+        .post('/api/collaborative/boss/celebration/seen')
+        .set('Authorization', `Bearer ${studentToken}`)
+        .send({ battleId: 'weak-battle-id' });
+
+      expect(seenRes.status).toBe(200);
+      expect(seenRes.body).toHaveProperty('success', true);
+
+      // Verify it is now flagged as seen
+      const activeRes2 = await request(app)
+        .get('/api/collaborative/boss/active')
+        .set('Authorization', `Bearer ${studentToken}`);
+      
+      expect(activeRes2.status).toBe(200);
+      expect(activeRes2.body.participant.celebrationSeenAt).not.toBeNull();
+    });
+  });
+
   describe('6. Right-to-Be-Forgotten Data Deletion (DELETE /api/users/me/data)', () => {
     it('should successfully cascade delete all user data and attempts', async () => {
+      // Seed participant and audit record for 'test-student-id' first to test GDPR cascade
+      inMemoryState.bossBattleParticipants.push({
+        userId: 'test-student-id',
+        battleId: 'weak-battle-id',
+        totalDamage: 45,
+        gritAttemptsCount: 3,
+        celebrationSeenAt: null,
+        createdAt: new Date().toISOString()
+      });
+      inMemoryState.bossApprovalAudits.push({
+        id: 'test-audit-gdpr',
+        userId: 'test-student-id',
+        tenantId: 'test-tenant-id',
+        action: 'TEST_GDPR',
+        targetId: 'weak-battle-id',
+        details: 'Audit to be deleted',
+        createdAt: new Date().toISOString()
+      });
+
       // 1. Double check the user exists in inMemoryState
       const student = inMemoryState.users.find(u => u.id === 'test-student-id');
       expect(student).toBeDefined();
@@ -591,6 +1035,12 @@ describe('Phase-12 Collaborative Learning and Peer Support Integration Tests', (
 
       const deletedCelebrations = inMemoryState.parentalCelebrations.filter(c => c.childId === 'test-student-id');
       expect(deletedCelebrations.length).toBe(0);
+
+      const deletedParticipants = inMemoryState.bossBattleParticipants.filter(p => p.userId === 'test-student-id');
+      expect(deletedParticipants.length).toBe(0);
+
+      const deletedAudits = inMemoryState.bossApprovalAudits.filter(a => a.userId === 'test-student-id');
+      expect(deletedAudits.length).toBe(0);
     });
   });
 });

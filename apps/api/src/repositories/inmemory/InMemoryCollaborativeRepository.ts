@@ -259,4 +259,138 @@ export class InMemoryCollaborativeRepository implements CollaborativeRepository 
       .filter(a => a.childUserId === childUserId)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
+
+  async findActiveBossBattle(classId: string): Promise<any | null> {
+    const now = new Date();
+    const battle = inMemoryState.bossBattles.find(
+      b => b.classId === classId && new Date(b.startsAt) <= now && now <= new Date(b.endsAt)
+    );
+    if (!battle) return null;
+
+    const boss = inMemoryState.bosses.find(b => b.id === battle.bossId);
+    return {
+      ...battle,
+      boss: boss || null
+    };
+  }
+
+  async createBossBattle(data: { classId: string; bossId: string; startsAt: Date; endsAt: Date }): Promise<any> {
+    const boss = inMemoryState.bosses.find(b => b.id === data.bossId);
+    if (!boss) throw new Error('Boss not found');
+    const battle = {
+      id: 'battle_' + Math.random().toString(36).substr(2, 9),
+      classId: data.classId,
+      bossId: data.bossId,
+      currentHp: boss.maxHp,
+      startsAt: data.startsAt.toISOString(),
+      endsAt: data.endsAt.toISOString(),
+      defeatedAt: null,
+      isAlive: true,
+      createdAt: new Date().toISOString()
+    };
+    inMemoryState.bossBattles.push(battle);
+    return battle;
+  }
+
+  async applyBossDamage(
+    userId: string,
+    battleId: string,
+    damage: number,
+    isGrit: boolean
+  ): Promise<{ battle: any; justDefeated: boolean }> {
+    const battle = inMemoryState.bossBattles.find(b => b.id === battleId);
+    if (!battle) throw new Error('Battle not found');
+
+    let justDefeated = false;
+    if (battle.isAlive) {
+      battle.currentHp = Math.max(0, battle.currentHp - damage);
+      if (battle.currentHp === 0) {
+        battle.isAlive = false;
+        battle.defeatedAt = new Date().toISOString();
+        justDefeated = true;
+      }
+    }
+
+    let participant = inMemoryState.bossBattleParticipants.find(
+      p => p.userId === userId && p.battleId === battleId
+    );
+    if (!participant) {
+      participant = {
+        userId,
+        battleId,
+        totalDamage: 0,
+        gritAttemptsCount: 0,
+        celebrationSeenAt: null,
+        createdAt: new Date().toISOString()
+      };
+      inMemoryState.bossBattleParticipants.push(participant);
+    }
+
+    participant.totalDamage += damage;
+    if (isGrit) {
+      participant.gritAttemptsCount += 1;
+    }
+
+    const boss = inMemoryState.bosses.find(b => b.id === battle.bossId);
+    return {
+      battle: {
+        ...battle,
+        boss: boss || null
+      },
+      justDefeated
+    };
+  }
+
+  async findParticipant(userId: string, battleId: string): Promise<any | null> {
+    return inMemoryState.bossBattleParticipants.find(
+      p => p.userId === userId && p.battleId === battleId
+    ) || null;
+  }
+
+  async updateCelebrationSeen(userId: string, battleId: string): Promise<void> {
+    const participant = inMemoryState.bossBattleParticipants.find(
+      p => p.userId === userId && p.battleId === battleId
+    );
+    if (participant) {
+      participant.celebrationSeenAt = new Date().toISOString();
+    }
+  }
+
+  async findQuestionPool(classId: string): Promise<any | null> {
+    return inMemoryState.bossQuestionPools.find(p => p.classId === classId) || null;
+  }
+
+  async upsertQuestionPool(classId: string, questionsJson: string): Promise<any> {
+    let pool = inMemoryState.bossQuestionPools.find(p => p.classId === classId);
+    if (!pool) {
+      pool = {
+        id: 'pool_' + Math.random().toString(36).substr(2, 9),
+        classId,
+        questionsJson,
+        lastGeneratedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      };
+      inMemoryState.bossQuestionPools.push(pool);
+    } else {
+      pool.questionsJson = questionsJson;
+      pool.lastGeneratedAt = new Date().toISOString();
+    }
+    return pool;
+  }
+
+  async createApprovalAudit(data: {
+    userId: string;
+    tenantId: string;
+    action: string;
+    targetId: string;
+    details: string;
+  }): Promise<any> {
+    const audit = {
+      id: 'audit_' + Math.random().toString(36).substr(2, 9),
+      ...data,
+      createdAt: new Date().toISOString()
+    };
+    inMemoryState.bossApprovalAudits.push(audit);
+    return audit;
+  }
 }

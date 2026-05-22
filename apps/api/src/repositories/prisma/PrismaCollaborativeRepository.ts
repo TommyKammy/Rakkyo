@@ -214,4 +214,146 @@ export class PrismaCollaborativeRepository implements CollaborativeRepository {
       orderBy: { createdAt: 'desc' }
     });
   }
+
+  async findActiveBossBattle(classId: string): Promise<any | null> {
+    const now = new Date();
+    return prisma.bossBattle.findFirst({
+      where: {
+        classId,
+        startsAt: { lte: now },
+        endsAt: { gte: now }
+      },
+      include: { boss: true }
+    });
+  }
+
+  async createBossBattle(data: { classId: string; bossId: string; startsAt: Date; endsAt: Date }): Promise<any> {
+    const boss = await prisma.boss.findUnique({
+      where: { id: data.bossId }
+    });
+    if (!boss) throw new Error('Boss not found');
+
+    return prisma.bossBattle.create({
+      data: {
+        classId: data.classId,
+        bossId: data.bossId,
+        currentHp: boss.maxHp,
+        startsAt: data.startsAt,
+        endsAt: data.endsAt,
+        isAlive: true
+      },
+      include: { boss: true }
+    });
+  }
+
+  async applyBossDamage(
+    userId: string,
+    battleId: string,
+    damage: number,
+    isGrit: boolean
+  ): Promise<{ battle: any; justDefeated: boolean }> {
+    return prisma.$transaction(async tx => {
+      const battle = await tx.bossBattle.findUnique({
+        where: { id: battleId }
+      });
+      if (!battle) throw new Error('Battle not found');
+
+      let justDefeated = false;
+      let updatedBattle = battle;
+
+      if (battle.isAlive) {
+        const newHp = Math.max(0, battle.currentHp - damage);
+        const defeatedNow = newHp === 0;
+
+        updatedBattle = await tx.bossBattle.update({
+          where: { id: battleId },
+          data: {
+            currentHp: newHp,
+            isAlive: !defeatedNow,
+            defeatedAt: defeatedNow ? new Date() : null
+          },
+          include: { boss: true }
+        });
+
+        if (defeatedNow) {
+          justDefeated = true;
+        }
+      }
+
+      await tx.bossBattleParticipant.upsert({
+        where: {
+          userId_battleId: { userId, battleId }
+        },
+        create: {
+          userId,
+          battleId,
+          totalDamage: damage,
+          gritAttemptsCount: isGrit ? 1 : 0
+        },
+        update: {
+          totalDamage: { increment: damage },
+          gritAttemptsCount: { increment: isGrit ? 1 : 0 }
+        }
+      });
+
+      return {
+        battle: updatedBattle,
+        justDefeated
+      };
+    }, {
+      isolationLevel: 'Serializable'
+    });
+  }
+
+  async findParticipant(userId: string, battleId: string): Promise<any | null> {
+    return prisma.bossBattleParticipant.findUnique({
+      where: {
+        userId_battleId: { userId, battleId }
+      }
+    });
+  }
+
+  async updateCelebrationSeen(userId: string, battleId: string): Promise<void> {
+    await prisma.bossBattleParticipant.update({
+      where: {
+        userId_battleId: { userId, battleId }
+      },
+      data: {
+        celebrationSeenAt: new Date()
+      }
+    });
+  }
+
+  async findQuestionPool(classId: string): Promise<any | null> {
+    return prisma.bossQuestionPool.findUnique({
+      where: { classId }
+    });
+  }
+
+  async upsertQuestionPool(classId: string, questionsJson: string): Promise<any> {
+    return prisma.bossQuestionPool.upsert({
+      where: { classId },
+      create: {
+        classId,
+        questionsJson,
+        lastGeneratedAt: new Date()
+      },
+      update: {
+        questionsJson,
+        lastGeneratedAt: new Date()
+      }
+    });
+  }
+
+  async createApprovalAudit(data: {
+    userId: string;
+    tenantId: string;
+    action: string;
+    targetId: string;
+    details: string;
+  }): Promise<any> {
+    return prisma.bossApprovalAudit.create({
+      data
+    });
+  }
 }

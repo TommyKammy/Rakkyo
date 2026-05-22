@@ -73,11 +73,22 @@ export interface RecommendationResult {
   isMock: boolean;
 }
 
+export interface BossQuestion {
+  id: string;
+  prompt: string;
+  answers: string[];
+  options: string[];
+  explanation: string;
+  hints: string[];
+  difficulty: number;
+}
+
 export interface AiTutorProvider {
   generateHint(context: HintContext): Promise<HintResult>;
   diagnoseMistake(context: DiagnoseContext): Promise<DiagnosisResult>;
   generateSimilarQuestion(context: SimilarQuestionContext): Promise<SimilarQuestionResult>;
   generateRecommendation(context: RecommendationContext): Promise<RecommendationResult>;
+  generateBossQuestionPool(attribute: string, classLevel: number): Promise<{ questions: BossQuestion[]; isMock: boolean }>;
 }
 
 export class MockAiTutorProvider implements AiTutorProvider {
@@ -241,6 +252,41 @@ AIのつまずき分析によると、符号のきまりをちょっとだけ整
       recommendedLessonId,
       recommendedLessonName,
       reason,
+      isMock: true
+    };
+  }
+
+  async generateBossQuestionPool(attribute: string, classLevel: number): Promise<{ questions: BossQuestion[]; isMock: boolean }> {
+    const questions: BossQuestion[] = [];
+    const topics = [
+      { name: '正負の数', formula: (i: number) => `$-${i} + ${i * 2}$`, ans: (i: number) => `${i}` },
+      { name: '文字と式', formula: (i: number) => `$${i}x - ${i * 3}x$`, ans: (i: number) => `-${i * 2}x` },
+      { name: '一次方程式', formula: (i: number) => `$x - ${i} = ${i * 2}$`, ans: (i: number) => `${i * 3}` }
+    ];
+
+    for (let i = 1; i <= 100; i++) {
+      const topic = topics[i % topics.length];
+      const diff = Math.min(5, Math.max(1, Math.floor((i - 1) / 20) + 1)); // difficulty 1 to 5
+      const prompt = `問${i}: ${topic.formula(i)} を計算しなさい。`;
+      const ans = topic.ans(i);
+
+      questions.push({
+        id: `bq_${i}`,
+        prompt,
+        answers: [ans, ans.replace(/\s+/g, '')],
+        options: [],
+        explanation: `これは${topic.name}の練習問題です。難易度は ${diff} だよ。`,
+        hints: [
+          `まずは ${topic.name} の基本を思い出してみよう！`,
+          `数直線や文字のまとめ方のきまりを意識してみてね。`,
+          `答えはズバリ ${ans} になるように計算してみよう！`
+        ],
+        difficulty: diff
+      });
+    }
+
+    return {
+      questions,
       isMock: true
     };
   }

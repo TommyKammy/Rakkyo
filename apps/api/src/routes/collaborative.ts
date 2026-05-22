@@ -4,7 +4,9 @@ import crypto from 'crypto';
 import { authMiddleware, AuthenticatedRequest } from '../middlewares/auth';
 import { requireSecret } from '../utils/secrets';
 import { recordAbuseStrike } from '../utils/abuseTracker';
-import { SafetyFilter } from '@rakkyo/ai-tutor';
+import { SafetyFilter, AiTutorProviderFactory, BossQuestion } from '@rakkyo/ai-tutor';
+import { calculateGritDamage } from '../services/gritDamage';
+import prisma from '../db';
 
 const router = Router();
 
@@ -502,6 +504,357 @@ router.post('/celebration/:token/respond', async (req: AuthenticatedRequest, res
     );
 
     res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==========================================
+// Phase-16-A: Boss Battle APIs
+// ==========================================
+
+// 11. GET /boss/active - Get current active boss battle session (Student)
+router.get('/boss/active', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const repos = req.repos!;
+
+    const enrollment = await repos.users.findEnrollment(userId, 'STUDENT');
+    if (!enrollment) {
+      return res.status(404).json({ error: 'クラスに所属していません' });
+    }
+
+    const classId = enrollment.classId;
+
+    const battle = await repos.collaborative.findActiveBossBattle(classId);
+    if (!battle) {
+      return res.status(404).json({ error: '現在アクティブなボスバトルはありません' });
+    }
+
+    const participant = await repos.collaborative.findParticipant(userId, battle.id);
+
+    // Calculate total class damage safely across database and mock configurations (SOC)
+    let totalClassDamage = 0;
+    if (repos.collaborative.constructor.name === 'PrismaCollaborativeRepository') {
+      const sumResult = await prisma.bossBattleParticipant.aggregate({
+        where: { battleId: battle.id },
+        _sum: { totalDamage: true }
+      });
+      totalClassDamage = sumResult._sum.totalDamage || 0;
+    } else {
+      const { inMemoryState } = require('../repositories/inmemory/state');
+      totalClassDamage = inMemoryState.bossBattleParticipants
+        .filter((p: any) => p.battleId === battle.id)
+        .reduce((sum: number, p: any) => sum + p.totalDamage, 0);
+    }
+
+    res.json({
+      battle: {
+        id: battle.id,
+        currentHp: battle.currentHp,
+        startsAt: new Date(battle.startsAt).toISOString(),
+        endsAt: new Date(battle.endsAt).toISOString(),
+        defeatedAt: battle.defeatedAt ? new Date(battle.defeatedAt).toISOString() : null,
+        isAlive: battle.isAlive,
+        totalClassDamage,
+        boss: {
+          id: battle.boss.id,
+          name: battle.boss.name,
+          maxHp: battle.boss.maxHp,
+          attribute: battle.boss.attribute,
+        }
+      },
+      participant: participant ? {
+        totalDamage: participant.totalDamage,
+        gritAttemptsCount: participant.gritAttemptsCount,
+        celebrationSeenAt: participant.celebrationSeenAt ? new Date(participant.celebrationSeenAt).toISOString() : null
+      } : {
+        totalDamage: 0,
+        gritAttemptsCount: 0,
+        celebrationSeenAt: null
+      }
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 12. GET /boss/question - Fetch a random question from approved class question pool (Student)
+router.get('/boss/question', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const repos = req.repos!;
+
+    const enrollment = await repos.users.findEnrollment(userId, 'STUDENT');
+    if (!enrollment) {
+      return res.status(404).json({ error: 'クラスに所属していません' });
+    }
+
+    const classId = enrollment.classId;
+
+    const pool = await repos.collaborative.findQuestionPool(classId);
+    if (!pool) {
+      return res.status(404).json({ error: 'ボス問題プールが生成されていません' });
+    }
+
+    const questions: BossQuestion[] = JSON.parse(pool.questionsJson);
+    if (questions.length === 0) {
+      return res.status(404).json({ error: 'ボス問題プールが空です' });
+    }
+
+    const randomIndex = Math.floor(Math.random() * questions.length);
+    const question = questions[randomIndex];
+
+    // Security (A-4): Strip answers and explanation to prevent child cheating!
+    res.json({
+      id: question.id,
+      prompt: question.prompt,
+      hints: question.hints,
+      difficulty: question.difficulty
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 13. POST /boss/attack - Submit answer to inflict damage to active boss (Student)
+router.post('/boss/attack', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const repos = req.repos!;
+
+    const attackSchema = z.object({
+      questionId: z.string(),
+      answerSubmitted: z.string().max(100),
+      hintsUsed: z.number().int().nonnegative()
+    });
+
+    const { questionId, answerSubmitted, hintsUsed } = attackSchema.parse(req.body);
+
+    const enrollment = await repos.users.findEnrollment(userId, 'STUDENT');
+    if (!enrollment) {
+      return res.status(404).json({ error: 'クラスに所属していません' });
+    }
+
+    const classId = enrollment.classId;
+
+    const battle = await repos.collaborative.findActiveBossBattle(classId);
+    if (!battle) {
+      return res.status(400).json({ error: 'アクティブなボスバトルがありません' });
+    }
+
+    // Time window enforcement (A-5)
+    const now = new Date();
+    if (new Date(battle.startsAt) > now || now > new Date(battle.endsAt)) {
+      return res.status(400).json({ error: 'ボスバトルの制限時間外です' });
+    }
+
+    const pool = await repos.collaborative.findQuestionPool(classId);
+    if (!pool) {
+      return res.status(404).json({ error: 'ボス問題プールがありません' });
+    }
+
+    const questions: BossQuestion[] = JSON.parse(pool.questionsJson);
+    const question = questions.find(q => q.id === questionId);
+    if (!question) {
+      return res.status(404).json({ error: '問題が見つかりません' });
+    }
+
+    const cleanAnswer = answerSubmitted.trim().toLowerCase();
+    const isCorrect = question.answers.some(ans => ans.trim().toLowerCase() === cleanAnswer);
+
+    // P16A-002: Grit Damage Engine
+    const damage = calculateGritDamage(question.difficulty, isCorrect, hintsUsed);
+
+    // A-1: Atomic damage processing
+    const isGrit = hintsUsed > 0;
+    const { battle: updatedBattle, justDefeated } = await repos.collaborative.applyBossDamage(
+      userId,
+      battle.id,
+      damage,
+      isGrit
+    );
+
+    // A-6: Award badge on defeat idempotently via upsert/try-catch
+    if (justDefeated) {
+      if (repos.collaborative.constructor.name === 'PrismaCollaborativeRepository') {
+        const prismaInstance = require('../../db').default;
+        await prismaInstance.badge.upsert({
+          where: { id: 'boss_defeat_badge' },
+          create: {
+            id: 'boss_defeat_badge',
+            name: '魔王撃破の証',
+            iconUrl: '🏆',
+            conditionType: 'BOSS_DEFEAT',
+            threshold: 1
+          },
+          update: {}
+        });
+      }
+      await repos.attempts.addUserBadge(userId, '🏆 魔王撃破の証');
+    }
+
+    res.json({
+      success: true,
+      isCorrect,
+      damage,
+      currentHp: updatedBattle.currentHp,
+      isAlive: updatedBattle.isAlive,
+      justDefeated
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 14. POST /boss/celebration/seen - Mark celebration scene as viewed (Student)
+router.post('/boss/celebration/seen', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const repos = req.repos!;
+
+    const schema = z.object({
+      battleId: z.string()
+    });
+
+    const { battleId } = schema.parse(req.body);
+
+    const participant = await repos.collaborative.findParticipant(userId, battleId);
+    if (!participant) {
+      return res.status(404).json({ error: 'ボスバトルの参加実績が見つかりません' });
+    }
+
+    await repos.collaborative.updateCelebrationSeen(userId, battleId);
+
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 15. POST /boss/pool/generate - Generate boss battle question pool dynamically (Teacher)
+router.post('/boss/pool/generate', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const repos = req.repos!;
+
+    // Role verification
+    const teacherEnrollment = await repos.users.findEnrollment(userId, 'TEACHER');
+    if (!teacherEnrollment) {
+      return res.status(403).json({ error: '教師権限が必要です' });
+    }
+
+    const schema = z.object({
+      classId: z.string(),
+      attribute: z.string().min(1).max(100)
+    });
+
+    const { classId, attribute } = schema.parse(req.body);
+
+    // Cross-tenant verification: Enrolled Class check (A-3)
+    const enrollments = await repos.users.findEnrollmentsByClass(classId, 'TEACHER');
+    const isEnrolled = enrollments.some(e => e.userId === userId);
+    if (!isEnrolled) {
+      return res.status(403).json({ error: 'クラスの担当教師ではありません（クロステナント拒絶）' });
+    }
+
+    // Cost reduction weekly limit (A-2)
+    const existingPool = await repos.collaborative.findQuestionPool(classId);
+    if (existingPool) {
+      const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      if (new Date(existingPool.lastGeneratedAt).getTime() > oneWeekAgo) {
+        return res.status(429).json({ error: 'AI問題プール生成は週に1回のみ可能です' });
+      }
+    }
+
+    const provider = AiTutorProviderFactory.getProvider();
+    const { questions } = await provider.generateBossQuestionPool(attribute, 1);
+
+    await repos.collaborative.upsertQuestionPool(classId, JSON.stringify(questions));
+
+    // Log the audit
+    const tenantId = teacherEnrollment.class.tenantId;
+    await repos.collaborative.createApprovalAudit({
+      userId,
+      tenantId,
+      action: 'GENERATE_POOL',
+      targetId: classId,
+      details: `ボスの属性「${attribute}」の問題プールを生成しました`
+    });
+
+    res.json({
+      success: true,
+      questionsCount: questions.length
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 16. POST /boss/pool/approve - Approve and start a boss battle (Teacher)
+router.post('/boss/pool/approve', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const repos = req.repos!;
+
+    const teacherEnrollment = await repos.users.findEnrollment(userId, 'TEACHER');
+    if (!teacherEnrollment) {
+      return res.status(403).json({ error: '教師権限が必要です' });
+    }
+
+    const schema = z.object({
+      classId: z.string(),
+      bossId: z.string(),
+      startsAt: z.string(),
+      endsAt: z.string()
+    });
+
+    const { classId, bossId, startsAt, endsAt } = schema.parse(req.body);
+
+    // Cross-tenant verification (A-3)
+    const enrollments = await repos.users.findEnrollmentsByClass(classId, 'TEACHER');
+    const isEnrolled = enrollments.some(e => e.userId === userId);
+    if (!isEnrolled) {
+      return res.status(403).json({ error: 'クラスの担当教師ではありません（クロステナント拒絶）' });
+    }
+
+    let classTenantId = '';
+    if (repos.collaborative.constructor.name === 'PrismaCollaborativeRepository') {
+      const prismaInstance = require('../../db').default;
+      const cls = await prismaInstance.class.findUnique({
+        where: { id: classId }
+      });
+      classTenantId = cls ? cls.tenantId : '';
+    } else {
+      const { inMemoryState } = require('../repositories/inmemory/state');
+      const cls = inMemoryState.classes.find((c: any) => c.id === classId);
+      classTenantId = cls ? cls.tenantId : '';
+    }
+
+    if (classTenantId !== req.tenantId) {
+      return res.status(403).json({ error: 'テナントが一致しません（クロステナント拒絶）' });
+    }
+
+    const battle = await repos.collaborative.createBossBattle({
+      classId,
+      bossId,
+      startsAt: new Date(startsAt),
+      endsAt: new Date(endsAt)
+    });
+
+    // Log the audit
+    await repos.collaborative.createApprovalAudit({
+      userId,
+      tenantId: req.tenantId!,
+      action: 'APPROVE_BATTLE',
+      targetId: battle.id,
+      details: `クラス ${classId} に対するボスバトル ${battle.id} を承認・開始しました`
+    });
+
+    res.json({
+      success: true,
+      battleId: battle.id
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

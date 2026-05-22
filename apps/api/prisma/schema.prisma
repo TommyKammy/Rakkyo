@@ -76,6 +76,10 @@ model User {
   // Phase-15.5
   childSafetyAlerts   SafetyAlert[]            @relation("ChildSafetyAlerts")
 
+  // Phase-16-A
+  bossBattleParticipants BossBattleParticipant[]
+  bossApprovalAudits     BossApprovalAudit[]
+
   @@unique([tenantId, email])
   @@index([tenantId])
 }
@@ -92,6 +96,10 @@ model Class {
   // Phase-12
   hiramekiTips  HiramekiTip[]
   classMissions ClassMission[]
+
+  // Phase-16-A
+  bossBattles      BossBattle[]
+  bossQuestionPool BossQuestionPool?
 
   @@index([tenantId])
 }
@@ -317,4 +325,69 @@ model SafetyAlert {
 
   @@index([childUserId])
   @@index([status])
+}
+
+// Phase-16-A: Boss Battle Models
+model Boss {
+  id            String       @id @default(uuid())
+  name          String
+  maxHp         Int
+  attribute     String       // e.g. "NEGATIVE_NUMBERS", "EQUATIONS"
+  durationWeeks Int          @default(1)
+  createdAt     DateTime     @default(now())
+  battles       BossBattle[]
+}
+
+model BossBattle {
+  id           String                  @id @default(uuid())
+  classId      String
+  class        Class                   @relation(fields: [classId], references: [id], onDelete: Cascade)
+  bossId       String
+  boss         Boss                    @relation(fields: [bossId], references: [id], onDelete: Cascade)
+  currentHp    Int
+  startsAt     DateTime
+  endsAt       DateTime
+  defeatedAt   DateTime?
+  isAlive      Boolean                 @default(true)
+  createdAt    DateTime                @default(now())
+  participants BossBattleParticipant[]
+
+  @@index([classId])
+  @@index([bossId])
+}
+
+model BossBattleParticipant {
+  userId            String
+  user              User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  battleId          String
+  battle            BossBattle @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  totalDamage       Int        @default(0)
+  gritAttemptsCount Int        @default(0)
+  celebrationSeenAt DateTime?
+  createdAt         DateTime   @default(now())
+
+  @@id([userId, battleId])
+}
+
+model BossQuestionPool {
+  id              String   @id @default(uuid())
+  classId         String   @unique
+  class           Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  questionsJson   String   // Cache of generated 100 questions as JSON
+  lastGeneratedAt DateTime @default(now())
+  createdAt       DateTime @default(now())
+}
+
+model BossApprovalAudit {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId  String
+  action    String   // "APPROVE" | "REPLACE_QUESTION"
+  targetId  String   // ID of the approved question pool or battle
+  details   String
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([userId])
 }

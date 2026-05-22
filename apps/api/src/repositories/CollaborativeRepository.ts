@@ -61,4 +61,25 @@ export interface CollaborativeRepository {
     payload: string;
   }): Promise<any>;
   findSafetyAlertsByChild(childUserId: string): Promise<any[]>;
+
+  // Phase-16-A: Boss Battle support
+  findActiveBossBattle(classId: string): Promise<any | null>;
+  createBossBattle(data: { classId: string; bossId: string; startsAt: Date; endsAt: Date }): Promise<any>;
+  applyBossDamage(
+    userId: string,
+    battleId: string,
+    damage: number,
+    isGrit: boolean
+  ): Promise<{ battle: any; justDefeated: boolean }>;
+  findParticipant(userId: string, battleId: string): Promise<any | null>;
+  updateCelebrationSeen(userId: string, battleId: string): Promise<void>;
+  findQuestionPool(classId: string): Promise<any | null>;
+  upsertQuestionPool(classId: string, questionsJson: string): Promise<any>;
+  createApprovalAudit(data: {
+    userId: string;
+    tenantId: string;
+    action: string;
+    targetId: string;
+    details: string;
+  }): Promise<any>;
 }
