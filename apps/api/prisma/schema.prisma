@@ -288,6 +288,8 @@ model ParentalCelebration {
   token         String   @unique // 保護者用リンクのトークン
   parentStamp   String?  // 保護者からのスタンプ ("GREAT_JOB", "PROUD_OF_YOU", "KEEP_IT_UP" など)
   parentComment String?
+  isResponded   Boolean  @default(false)
+  expiresAt     DateTime
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

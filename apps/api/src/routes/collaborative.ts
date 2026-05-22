@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
+import crypto from 'crypto';
 import prisma from '../db';
 import { mockDb } from '../mockDb';
 import { authMiddleware, AuthenticatedRequest } from '../middlewares/auth';
@@ -410,14 +411,17 @@ router.post('/celebration/trigger', authMiddleware, async (req: AuthenticatedReq
     const isMock = req.isMock || process.env.NODE_ENV === 'test';
     const { attemptId } = z.object({ attemptId: z.string() }).parse(req.body);
 
-    const token = 'celeb_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+    const token = 'celeb_' + crypto.randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // 14 days expiration
 
     if (!isMock) {
       const celeb = await prisma.parentalCelebration.create({
         data: {
           childId,
           attemptId,
-          token
+          token,
+          isResponded: false,
+          expiresAt
         }
       });
       res.json({ success: true, token, celebrationId: celeb.id });
@@ -453,6 +457,10 @@ router.get('/celebration/:token', async (req, res) => {
         return res.status(404).json({ error: 'お祝いリンクが見つかりませんでした' });
       }
 
+      if (new Date(celeb.expiresAt).getTime() < Date.now()) {
+        return res.status(400).json({ error: 'お祝いリンクの有効期限が切れています' });
+      }
+
       res.json({
         childNickname: celeb.child.nickname,
         attempt: {
@@ -465,13 +473,18 @@ router.get('/celebration/:token', async (req, res) => {
           createdAt: celeb.attempt.createdAt.toISOString()
         },
         parentStamp: celeb.parentStamp,
-        parentComment: celeb.parentComment
+        parentComment: celeb.parentComment,
+        isResponded: celeb.isResponded
       });
     } else {
       let celeb = mockDb.findParentalCelebrationByToken(token);
       if (!celeb) {
         // Dynamic seed in mock for test ease
         celeb = mockDb.createParentalCelebration('test-student-id', 'attempt_seed_4', token);
+      }
+
+      if (new Date(celeb.expiresAt).getTime() < Date.now()) {
+        return res.status(400).json({ error: 'お祝いリンクの有効期限が切れています' });
       }
 
       const child = mockDb.findUserById(celeb.childId);
@@ -489,7 +502,8 @@ router.get('/celebration/:token', async (req, res) => {
           createdAt: attempt ? attempt.createdAt : new Date().toISOString()
         },
         parentStamp: celeb.parentStamp,
-        parentComment: celeb.parentComment
+        parentComment: celeb.parentComment,
+        isResponded: celeb.isResponded
       });
     }
   } catch (e: any) {
@@ -504,17 +518,33 @@ router.post('/celebration/:token/respond', async (req, res) => {
     const { stamp, comment } = respondSchema.parse(req.body);
     const isMock = token.startsWith('celeb_mock') || process.env.NODE_ENV === 'test';
 
+    // Safety Filter Check on Parent Comment
+    if (comment) {
+      const isSafe = !SafetyFilter.isAbusive(comment);
+      if (!isSafe) {
+        return res.status(400).json({
+          error: 'abusive_content',
+          message: 'あれっ、もう少し優しい言葉を使ってみようかな？ Onion君も悲しんじゃうかも。🧅'
+        });
+      }
+    }
+
     if (!isMock) {
       const celeb = await prisma.parentalCelebration.findUnique({ where: { token } });
       if (!celeb) {
         return res.status(404).json({ error: 'お祝いリンクが見つかりませんでした' });
       }
 
+      if (celeb.isResponded || new Date(celeb.expiresAt).getTime() < Date.now()) {
+        return res.status(400).json({ error: 'お祝いリンクの有効期限が切れているか、すでに応答済みです' });
+      }
+
       await prisma.parentalCelebration.update({
         where: { token },
         data: {
           parentStamp: stamp,
-          parentComment: comment || null
+          parentComment: comment || null,
+          isResponded: true
         }
       });
 
@@ -529,6 +559,11 @@ router.post('/celebration/:token/respond', async (req, res) => {
 
       res.json({ success: true });
     } else {
+      const celeb = mockDb.findParentalCelebrationByToken(token);
+      if (celeb && (celeb.isResponded || new Date(celeb.expiresAt).getTime() < Date.now())) {
+        return res.status(400).json({ error: 'お祝いリンクの有効期限が切れているか、すでに応答済みです' });
+      }
+
       const success = mockDb.respondToParentalCelebration(token, stamp, comment);
       if (!success) {
         return res.status(404).json({ error: 'お祝いリンクが見つかりませんでした' });

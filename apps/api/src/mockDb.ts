@@ -113,6 +113,8 @@ export interface ParentalCelebrationMock {
   token: string;
   parentStamp: string | null;
   parentComment: string | null;
+  isResponded: boolean;
+  expiresAt: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -684,6 +686,8 @@ class MockDatabase {
       token,
       parentStamp: null,
       parentComment: null,
+      isResponded: false,
+      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(), // 14 days later
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -698,8 +702,12 @@ class MockDatabase {
   respondToParentalCelebration(token: string, stamp: string, comment?: string): boolean {
     const celeb = this.findParentalCelebrationByToken(token);
     if (celeb) {
+      if (celeb.isResponded || new Date(celeb.expiresAt).getTime() < Date.now()) {
+        return false;
+      }
       celeb.parentStamp = stamp;
       celeb.parentComment = comment || null;
+      celeb.isResponded = true;
       celeb.updatedAt = new Date().toISOString();
 
       // Also create a direct ParentMessage so the kid sees it as a notification!
@@ -707,6 +715,32 @@ class MockDatabase {
       return true;
     }
     return false;
+  }
+
+  deleteUserData(userId: string): void {
+    // 1. Delete celebrations related to child
+    this.parentalCelebrations = this.parentalCelebrations.filter(c => c.childId !== userId);
+    
+    // 2. Delete attempts
+    this.attempts = this.attempts.filter(a => a.userId !== userId);
+    
+    // 3. Delete parent messages
+    this.parentMessages = this.parentMessages.filter(m => m.userId !== userId);
+    
+    // 4. Delete peer stamps where user is sender or receiver
+    this.peerStamps = this.peerStamps.filter(s => s.senderId !== userId && s.receiverId !== userId);
+    
+    // 5. Delete hirameki tips
+    this.hiramekiTips = this.hiramekiTips.filter(t => t.userId !== userId);
+    
+    // 6. Delete class enrollments
+    this.classEnrollments = this.classEnrollments.filter(e => e.userId !== userId);
+    
+    // 7. Delete assignment progresses
+    this.assignmentProgresses = this.assignmentProgresses.filter(p => p.studentId !== userId);
+    
+    // 8. Delete user itself
+    this.users = this.users.filter(u => u.id !== userId);
   }
 }
 

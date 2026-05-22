@@ -224,5 +224,102 @@ describe('Phase-12 Collaborative Learning and Peer Support Integration Tests', (
       expect(childRes.body).toHaveProperty('parentStamp', 'GREAT_JOB');
       expect(childRes.body).toHaveProperty('parentComment', 'ヒントをあきらめずに使ってがんばったね！えらいぞ！');
     });
+
+    it('should block double response using the same celebration token', async () => {
+      expect(generatedToken).toBeDefined();
+      const res = await request(app)
+        .post(`/api/collaborative/celebration/${generatedToken}/respond`)
+        .send({
+          stamp: 'GREAT_JOB',
+          comment: '二重送信のテストです'
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'お祝いリンクの有効期限が切れているか、すでに応答済みです');
+    });
+
+    it('should allow GET requests on an already-responded celebration token but return responded details', async () => {
+      expect(generatedToken).toBeDefined();
+      const res = await request(app)
+        .get(`/api/collaborative/celebration/${generatedToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('isResponded', true);
+      expect(res.body).toHaveProperty('parentStamp', 'GREAT_JOB');
+    });
+
+    it('should block parental celebration respond if comment contains abusive content', async () => {
+      // Create a new token so it is not responded yet
+      const triggerRes = await request(app)
+        .post('/api/collaborative/celebration/trigger')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ attemptId: 'attempt_seed_4' });
+
+      expect(triggerRes.status).toBe(200);
+      const tempToken = triggerRes.body.token;
+
+      const res = await request(app)
+        .post(`/api/collaborative/celebration/${tempToken}/respond`)
+        .send({
+          stamp: 'KEEP_IT_UP',
+          comment: 'ばかやろう、もっと勉強しろ死ね！'
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'abusive_content');
+      expect(res.body.message).toContain('優しい言葉を使ってみようかな');
+    });
+
+    it('should block GET and POST requests if the celebration token is expired', async () => {
+      // Create an expired token manually in MockDB
+      const expiredToken = 'celeb_expired_mock_token_123';
+      const celeb = mockDb.createParentalCelebration('test-student-id', 'attempt_seed_4', expiredToken);
+      celeb.expiresAt = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(); // 1 day in the past
+
+      const getRes = await request(app)
+        .get(`/api/collaborative/celebration/${expiredToken}`);
+      expect(getRes.status).toBe(400);
+      expect(getRes.body).toHaveProperty('error', 'お祝いリンクの有効期限が切れています');
+
+      const postRes = await request(app)
+        .post(`/api/collaborative/celebration/${expiredToken}/respond`)
+        .send({
+          stamp: 'KEEP_IT_UP',
+          comment: 'がんばってね'
+        });
+      expect(postRes.status).toBe(400);
+      expect(postRes.body).toHaveProperty('error', 'お祝いリンクの有効期限が切れているか、すでに応答済みです');
+    });
+  });
+
+  describe('6. Right-to-Be-Forgotten Data Deletion (DELETE /api/users/me/data)', () => {
+    it('should successfully cascade delete all user data and attempts', async () => {
+      // 1. Double check the user exists in mockDb
+      const student = mockDb.findUserById('test-student-id');
+      expect(student).toBeDefined();
+
+      // 2. Perform DELETE request to wipe out test student data
+      const res = await request(app)
+        .delete('/api/users/me/data')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('success', true);
+      expect(res.body.message).toContain('完全に削除されました');
+
+      // 3. Verify user has been completely deleted
+      const deletedStudent = mockDb.findUserById('test-student-id');
+      expect(deletedStudent).toBeUndefined();
+
+      // 4. Verify associated data has also been completely cascaded
+      const deletedAttempts = mockDb.attempts.filter(a => a.userId === 'test-student-id');
+      expect(deletedAttempts.length).toBe(0);
+
+      const deletedEnrollments = mockDb.classEnrollments.filter(e => e.userId === 'test-student-id');
+      expect(deletedEnrollments.length).toBe(0);
+
+      const deletedCelebrations = mockDb.parentalCelebrations.filter(c => c.childId === 'test-student-id');
+      expect(deletedCelebrations.length).toBe(0);
+    });
   });
 });
