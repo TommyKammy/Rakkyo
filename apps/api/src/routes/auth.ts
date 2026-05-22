@@ -2,6 +2,7 @@ import { Router, Request } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
+import crypto from 'crypto';
 import { AuthenticatedRequest } from '../middlewares/auth';
 import { requireSecret } from '../utils/secrets';
 
@@ -23,8 +24,8 @@ const registerSchema = z.object({
 
 const loginSchema = z.object({
   email: z.string().email(),
-  password: z.string(),
-  tenantCode: z.string().optional()
+  password: z.string().max(100),
+  tenantCode: z.string().max(50).optional()
 });
 
 // Register
@@ -60,7 +61,7 @@ router.post('/register', async (req: Request, res, next) => {
     }
 
     const user = await authReq.repos!.users.createUser({
-      id: 'user_' + Math.random().toString(36).substr(2, 9),
+      id: 'user_' + crypto.randomUUID(),
       tenantId,
       email: parsed.email,
       passwordHash,

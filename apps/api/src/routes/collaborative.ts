@@ -22,8 +22,8 @@ const HIRAMEKI_NICKNAME_SECRET = requireSecret(
 
 // Validation Schemas
 const stampSchema = z.object({
-  receiverId: z.string(),
-  stampType: z.string(),
+  receiverId: z.string().max(100),
+  stampType: z.string().max(50),
 });
 
 const hiramekiSchema = z.object({
@@ -35,8 +35,8 @@ const contributeSchema = z.object({
 });
 
 const respondSchema = z.object({
-  stamp: z.string(),
-  comment: z.string().optional(),
+  stamp: z.string().max(50),
+  comment: z.string().max(200).optional(),
 });
 
 // 1. GET /room - Get asynchronous presence inside the "Rakkyo Room"
@@ -324,7 +324,7 @@ router.post('/celebration/trigger', authMiddleware, async (req: AuthenticatedReq
   try {
     const childId = req.userId!;
     const repos = req.repos!;
-    const { attemptId } = z.object({ attemptId: z.string() }).parse(req.body);
+    const { attemptId } = z.object({ attemptId: z.string().max(100) }).parse(req.body);
 
     const now = Date.now();
     const expiresAtMs = now + CELEBRATION_TTL_MS;
@@ -589,7 +589,7 @@ router.get('/boss/question', authMiddleware, async (req: AuthenticatedRequest, r
       return res.status(404).json({ error: 'ボス問題プールが空です' });
     }
 
-    const randomIndex = Math.floor(Math.random() * questions.length);
+    const randomIndex = crypto.randomInt(0, questions.length);
     const question = questions[randomIndex];
 
     // Security (A-4): Strip answers and explanation to prevent child cheating!

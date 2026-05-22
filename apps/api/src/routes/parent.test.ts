@@ -1,13 +1,14 @@
 import request from 'supertest';
 import app from '../app';
 import { inMemoryState } from '../repositories/inmemory/state';
+import crypto from 'crypto';
 
 describe('Parent Router /api/parent', () => {
   let token: string;
   let userId: string;
 
   beforeAll(async () => {
-    const testEmail = `parent_test_${Math.random().toString(36).substr(2, 9)}@rakkyo.com`;
+    const testEmail = `parent_test_${crypto.randomUUID()}@rakkyo.com`;
     const testPassword = 'password123';
     const testNickname = 'テスト保護者';
 

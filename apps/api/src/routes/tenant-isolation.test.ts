@@ -2,6 +2,7 @@ import request from 'supertest';
 import app from '../app';
 import { inMemoryState } from '../repositories/inmemory/state';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 
 const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'rakkyo-super-secret-key-12345';
 
@@ -124,7 +125,7 @@ describe('Multi-Tenant Isolation & Teacher Protection', () => {
     beforeAll(() => {
       // Seed teachers in inMemoryState
       const tShibuya = {
-        id: 't_shibuya_' + Math.random().toString(36).substr(2, 9),
+        id: 't_shibuya_' + crypto.randomUUID(),
         tenantId: 'tenant-shibuya',
         email: 'teacher-shibuya@example.com',
         passwordHash: 'dummy',
@@ -147,7 +148,7 @@ describe('Multi-Tenant Isolation & Teacher Protection', () => {
       inMemoryState.users.push(tShibuya);
 
       const tShinjuku = {
-        id: 't_shinjuku_' + Math.random().toString(36).substr(2, 9),
+        id: 't_shinjuku_' + crypto.randomUUID(),
         tenantId: 'tenant-shinjuku',
         email: 'teacher-shinjuku@example.com',
         passwordHash: 'dummy',

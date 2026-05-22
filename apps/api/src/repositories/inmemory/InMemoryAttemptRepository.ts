@@ -1,6 +1,7 @@
 import { AttemptRepository } from '../AttemptRepository';
 import { Attempt } from '@prisma/client';
 import { inMemoryState } from './state';
+import crypto from 'crypto';
 
 export class InMemoryAttemptRepository implements AttemptRepository {
   async createAttempt(data: {
@@ -15,7 +16,7 @@ export class InMemoryAttemptRepository implements AttemptRepository {
   }): Promise<Attempt> {
     const newAttempt = {
       ...data,
-      id: 'attempt_' + Math.random().toString(36).substr(2, 9),
+      id: 'attempt_' + crypto.randomUUID(),
       createdAt: new Date().toISOString(),
     };
     inMemoryState.attempts.push(newAttempt);

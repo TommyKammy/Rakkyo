@@ -181,6 +181,49 @@ export interface BossApprovalAuditMock {
   createdAt: string;
 }
 
+export interface AvatarMock {
+  id: string;
+  userId: string;
+  status: string;
+  baseVegetable: string;
+  mainColor: string;
+  facialFeatures: string;
+  clothing: string;
+  expression: string;
+  prompt: string;
+  objectKey: string;
+  rejectionReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AvatarGenerationQuotaMock {
+  id: string;
+  userId: string;
+  weekBucket: string;
+  count: number;
+  resetAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AvatarApprovalAuditMock {
+  id: string;
+  avatarId: string;
+  moderatorId: string;
+  action: string;
+  imageHash: string;
+  reason: string | null;
+  createdAt: string;
+}
+
+export interface ParentChildRelationMock {
+  id: string;
+  parentId: string;
+  childId: string;
+  createdAt: string;
+}
+
 class InMemoryState {
   tenants: TenantMock[] = [];
   users: UserMock[] = [];
@@ -196,6 +239,7 @@ class InMemoryState {
   classMissions: ClassMissionMock[] = [];
   parentalCelebrations: ParentalCelebrationMock[] = [];
   safetyAlerts: SafetyAlertMock[] = [];
+  parentChildRelations: ParentChildRelationMock[] = [];
 
   // Phase-16-A: Boss Battle Mock Arrays
   bosses: BossMock[] = [];
@@ -203,6 +247,11 @@ class InMemoryState {
   bossBattleParticipants: BossBattleParticipantMock[] = [];
   bossQuestionPools: BossQuestionPoolMock[] = [];
   bossApprovalAudits: BossApprovalAuditMock[] = [];
+
+  // Phase-16-B: AI Avatar Maker Mock Arrays
+  avatars: AvatarMock[] = [];
+  avatarQuotas: AvatarGenerationQuotaMock[] = [];
+  avatarApprovalAudits: AvatarApprovalAuditMock[] = [];
 
   constructor() {
     this.seed();
@@ -223,6 +272,7 @@ class InMemoryState {
     this.classMissions = [];
     this.parentalCelebrations = [];
     this.safetyAlerts = [];
+    this.parentChildRelations = [];
 
     // Phase-16-A Reset
     this.bosses = [];
@@ -230,6 +280,11 @@ class InMemoryState {
     this.bossBattleParticipants = [];
     this.bossQuestionPools = [];
     this.bossApprovalAudits = [];
+
+    // Phase-16-B Reset
+    this.avatars = [];
+    this.avatarQuotas = [];
+    this.avatarApprovalAudits = [];
 
     this.seed();
   }

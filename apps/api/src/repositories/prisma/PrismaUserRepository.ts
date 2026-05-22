@@ -1,6 +1,8 @@
 import { UserRepository } from '../UserRepository';
 import { User, Tenant, ClassEnrollment } from '@prisma/client';
 import prisma from '../../db';
+import { storageService } from '../../services/StorageService';
+
 
 export class PrismaUserRepository implements UserRepository {
   async findById(id: string): Promise<User | null> {
@@ -114,6 +116,11 @@ export class PrismaUserRepository implements UserRepository {
 
   async deleteUserData(userId: string): Promise<void> {
     // 忘れられる権利のトランザクション削除 (旧 users.ts の移植)
+    const avatars = await prisma.avatar.findMany({
+      where: { userId }
+    });
+    const objectKeys = avatars.map(a => a.objectKey);
+
     await prisma.$transaction(async (tx) => {
       // 1. onDelete: Cascade がない、あるいは不整合を防ぐため手動削除
       await tx.bossBattleParticipant.deleteMany({
@@ -122,6 +129,23 @@ export class PrismaUserRepository implements UserRepository {
       await tx.bossApprovalAudit.deleteMany({
         where: { userId }
       });
+
+      // Phase 16-B: Cascade deletion of Avatars, Quotas, and Audits
+      await tx.avatarApprovalAudit.deleteMany({
+        where: {
+          OR: [
+            { avatarId: { in: avatars.map(a => a.id) } },
+            { moderatorId: userId }
+          ]
+        }
+      });
+      await tx.avatarGenerationQuota.deleteMany({
+        where: { userId }
+      });
+      await tx.avatar.deleteMany({
+        where: { userId }
+      });
+
       await tx.parentalCelebration.deleteMany({
         where: { childId: userId }
       });
@@ -151,6 +175,13 @@ export class PrismaUserRepository implements UserRepository {
         where: { id: userId }
       });
     });
+
+    // Delete S3 physical files
+    await Promise.all(
+      objectKeys.map(key => storageService.deleteAvatarImage(key).catch(err => {
+        console.error(`Failed to delete storage file ${key}:`, err);
+      }))
+    );
   }
 
   async atomicAbuseStrike(userId: string, opts: {
@@ -229,5 +260,31 @@ export class PrismaUserRepository implements UserRepository {
     } catch (e) {
       return false;
     }
+  }
+
+  async findChildrenByParent(parentId: string): Promise<User[]> {
+    const relations = await prisma.parentChildRelation.findMany({
+      where: { parentId },
+      include: { child: true }
+    });
+    return relations.map(r => r.child);
+  }
+
+  async findParentsByChild(childId: string): Promise<User[]> {
+    const relations = await prisma.parentChildRelation.findMany({
+      where: { childId },
+      include: { parent: true }
+    });
+    return relations.map(r => r.parent);
+  }
+
+  async createParentChildRelation(parentId: string, childId: string): Promise<any> {
+    return prisma.parentChildRelation.upsert({
+      where: {
+        parentId_childId: { parentId, childId }
+      },
+      create: { parentId, childId },
+      update: {}
+    });
   }
 }

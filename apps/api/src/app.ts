@@ -10,6 +10,7 @@ import teacherRouter from './routes/teacher';
 import collaborativeRouter from './routes/collaborative';
 import usersRouter from './routes/users';
 import ttsRouter from './routes/tts';
+import avatarsRouter from './routes/avatars';
 
 const app = express();
 
@@ -27,6 +28,7 @@ app.use('/api/teacher', teacherRouter);
 app.use('/api/collaborative', collaborativeRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/tts', ttsRouter);
+app.use('/api/avatars', avatarsRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({

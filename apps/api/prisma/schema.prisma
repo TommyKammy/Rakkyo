@@ -80,6 +80,10 @@ model User {
   bossBattleParticipants BossBattleParticipant[]
   bossApprovalAudits     BossApprovalAudit[]
 
+  // Phase-16-B
+  avatars                Avatar[]
+  avatarQuotas           AvatarGenerationQuota[]
+
   @@unique([tenantId, email])
   @@index([tenantId])
 }
@@ -391,3 +395,50 @@ model BossApprovalAudit {
   @@index([tenantId])
   @@index([userId])
 }
+
+model Avatar {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status          String    // PENDING | APPROVED | REJECTED
+  baseVegetable   String
+  mainColor       String
+  facialFeatures  String
+  clothing        String
+  expression      String
+  prompt          String
+  objectKey       String    @unique
+  rejectionReason String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+model AvatarGenerationQuota {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  weekBucket String   // e.g. "2026-W21"
+  count      Int      @default(0)
+  resetAt    DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, weekBucket])
+  @@index([userId])
+}
+
+model AvatarApprovalAudit {
+  id            String   @id @default(uuid())
+  avatarId      String
+  moderatorId   String   // Teacher or Parent User ID
+  action        String   // "APPROVE" | "REJECT"
+  imageHash     String   // Integrational verification hash
+  reason        String?  // Rejection reason (preset choices)
+  createdAt     DateTime @default(now())
+
+  @@index([avatarId])
+  @@index([moderatorId])
+}
+

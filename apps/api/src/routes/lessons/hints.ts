@@ -8,9 +8,9 @@ import { recordAbuseStrike } from '../../utils/abuseTracker';
 const router = Router();
 
 const hintSchema = z.object({
-  questionId: z.string(),
+  questionId: z.string().max(100),
   hintsUsed: z.number().int().nonnegative(),
-  userQuestion: z.string().optional(),
+  userQuestion: z.string().max(500).optional(),
   isSocraticPreferred: z.boolean().optional(),
 });
 
