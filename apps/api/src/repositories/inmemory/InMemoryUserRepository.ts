@@ -142,7 +142,9 @@ export class InMemoryUserRepository implements UserRepository {
   }
 
   async deleteUserData(userId: string): Promise<void> {
-    // 忘れられる権利 Cascade 削除 (旧 deleteUserData の移植)
+    // GDPR-K compliant cascade — must mirror PrismaUserRepository.deleteUserData
+    // including any newly-added user-linked tables. When adding a new table
+    // that holds a userId, ALSO add a filter here.
     inMemoryState.parentalCelebrations = inMemoryState.parentalCelebrations.filter(c => c.childId !== userId);
     inMemoryState.attempts = inMemoryState.attempts.filter(a => a.userId !== userId);
     inMemoryState.parentMessages = inMemoryState.parentMessages.filter(m => m.userId !== userId);
@@ -150,7 +152,56 @@ export class InMemoryUserRepository implements UserRepository {
     inMemoryState.hiramekiTips = inMemoryState.hiramekiTips.filter(t => t.userId !== userId);
     inMemoryState.classEnrollments = inMemoryState.classEnrollments.filter(e => e.userId !== userId);
     inMemoryState.assignmentProgresses = inMemoryState.assignmentProgresses.filter(p => p.studentId !== userId);
+    inMemoryState.safetyAlerts = inMemoryState.safetyAlerts.filter(a => a.childUserId !== userId);
     inMemoryState.users = inMemoryState.users.filter(u => u.id !== userId);
+  }
+
+  async atomicAbuseStrike(userId: string, opts: {
+    windowMs: number;
+    lockThreshold: number;
+    lockDurationMs: number;
+  }): Promise<{ newCount: number; isLocked: boolean; lockedUntil: Date | null; justLocked: boolean }> {
+    // Atomic under Node.js because there is NO await between the read of
+    // `user` and the writes back into the same object. Other promises
+    // cannot interleave a microtask here.
+    const user = inMemoryState.users.find(u => u.id === userId);
+    if (!user) {
+      return { newCount: 0, isLocked: false, lockedUntil: null, justLocked: false };
+    }
+
+    const now = new Date();
+
+    // If the user is already locked we do NOT increment again — return the
+    // existing lock state so the caller can react but no duplicate work
+    // (e.g. another SafetyAlert) is queued.
+    if (user.lockedUntil) {
+      const existingLockedUntil = new Date(user.lockedUntil);
+      if (existingLockedUntil > now) {
+        return {
+          newCount: user.abuseCount || 0,
+          isLocked: true,
+          lockedUntil: existingLockedUntil,
+          justLocked: false
+        };
+      }
+    }
+
+    const lastAt = user.abuseLastAt ? new Date(user.abuseLastAt) : null;
+    const withinWindow = lastAt !== null && now.getTime() - lastAt.getTime() < opts.windowMs;
+    const previousCount = withinWindow ? Number(user.abuseCount || 0) : 0;
+    const newCount = previousCount + 1;
+
+    if (newCount >= opts.lockThreshold) {
+      const lockedUntil = new Date(now.getTime() + opts.lockDurationMs);
+      user.abuseCount = 0;
+      user.abuseLastAt = now.toISOString();
+      user.lockedUntil = lockedUntil.toISOString();
+      return { newCount, isLocked: true, lockedUntil, justLocked: true };
+    }
+
+    user.abuseCount = newCount;
+    user.abuseLastAt = now.toISOString();
+    return { newCount, isLocked: false, lockedUntil: null, justLocked: false };
   }
 
   async findParentMessages(userId: string): Promise<any[]> {

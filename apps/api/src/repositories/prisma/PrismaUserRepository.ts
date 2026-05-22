@@ -147,6 +147,54 @@ export class PrismaUserRepository implements UserRepository {
     });
   }
 
+  async atomicAbuseStrike(userId: string, opts: {
+    windowMs: number;
+    lockThreshold: number;
+    lockDurationMs: number;
+  }): Promise<{ newCount: number; isLocked: boolean; lockedUntil: Date | null; justLocked: boolean }> {
+    // Serializable isolation forces Postgres to detect concurrent
+    // read-modify-write conflicts on the same User row and abort one of
+    // the racing transactions, which Prisma surfaces as P2034. The caller
+    // can choose to retry; for now we just propagate.
+    return prisma.$transaction(async (tx) => {
+      const user = await tx.user.findUnique({ where: { id: userId } });
+      if (!user) {
+        return { newCount: 0, isLocked: false, lockedUntil: null, justLocked: false };
+      }
+
+      const now = new Date();
+
+      if (user.lockedUntil && user.lockedUntil > now) {
+        return {
+          newCount: user.abuseCount || 0,
+          isLocked: true,
+          lockedUntil: user.lockedUntil,
+          justLocked: false
+        };
+      }
+
+      const lastAt = user.abuseLastAt;
+      const withinWindow = lastAt !== null && now.getTime() - lastAt.getTime() < opts.windowMs;
+      const previousCount = withinWindow ? Number(user.abuseCount || 0) : 0;
+      const newCount = previousCount + 1;
+
+      if (newCount >= opts.lockThreshold) {
+        const lockedUntil = new Date(now.getTime() + opts.lockDurationMs);
+        await tx.user.update({
+          where: { id: userId },
+          data: { abuseCount: 0, abuseLastAt: now, lockedUntil }
+        });
+        return { newCount, isLocked: true, lockedUntil, justLocked: true };
+      }
+
+      await tx.user.update({
+        where: { id: userId },
+        data: { abuseCount: newCount, abuseLastAt: now }
+      });
+      return { newCount, isLocked: false, lockedUntil: null, justLocked: false };
+    }, { isolationLevel: 'Serializable' });
+  }
+
   async findParentMessages(userId: string): Promise<any[]> {
     return prisma.parentMessage.findMany({
       where: { userId },

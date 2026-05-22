@@ -36,4 +36,31 @@ export interface UserRepository {
   findParentMessages(userId: string): Promise<any[]>;
   createParentMessage(userId: string, message: string): Promise<any>;
   markParentMessageAsRead(id: string): Promise<boolean>;
+
+  /**
+   * Atomically apply one abuse strike to a user.
+   *
+   * Implementations MUST evaluate "is this strike inside the rolling
+   * window?", increment / reset the counter and decide whether to set
+   * `lockedUntil` — all inside a single transaction (Prisma) or a single
+   * synchronous block (InMemory). This closes the TOCTOU race where two
+   * concurrent strikes could each promote themselves to "lock triggered"
+   * and double-fire the parent notification.
+   */
+  atomicAbuseStrike(userId: string, opts: {
+    windowMs: number;
+    lockThreshold: number;
+    lockDurationMs: number;
+  }): Promise<{
+    newCount: number;
+    isLocked: boolean;
+    lockedUntil: Date | null;
+    /**
+     * True only for the request that actually transitioned the user
+     * into the locked state. Subsequent strikes that find the lock
+     * already in place return false here so notifications fire exactly
+     * once per lock event.
+     */
+    justLocked: boolean;
+  }>;
 }

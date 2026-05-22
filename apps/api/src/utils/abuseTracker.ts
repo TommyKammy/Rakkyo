@@ -1,15 +1,15 @@
 import { RepositoryContainer } from '../repositories';
 
-const WINDOW_MS = 60 * 60 * 1000; // 1 hour rolling window
-const LOCK_THRESHOLD = 3;
-const LOCK_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
+export const WINDOW_MS = 60 * 60 * 1000; // 1 hour rolling window
+export const LOCK_THRESHOLD = 3;
+export const LOCK_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export type AbuseSource = 'hint' | 'hirameki';
 
 export interface AbuseTrackResult {
   /** How many strikes are now on this user within the active 1-hour window. */
   newCount: number;
-  /** True when this strike triggered a 24-hour account lock. */
+  /** True when the user's account is currently locked (this call or earlier). */
   isLocked: boolean;
   /** When the lock expires (only set when isLocked). */
   lockedUntil?: Date;
@@ -19,49 +19,40 @@ export interface AbuseTrackResult {
  * Record an abuse-filter trigger for a student and apply the 24-hour
  * hard-lock policy when they cross the threshold within a 1-hour window.
  *
- * Notable behaviours:
+ * The increment+threshold+lock decision happens inside
+ * `repos.users.atomicAbuseStrike()` which serialises concurrent strikes.
+ * That guarantees the parent notification fires exactly once per lock
+ * event even when two abusive requests arrive simultaneously.
+ *
+ * Behaviour summary:
  * - We do NOT reset the counter on a subsequent clean input. Resets are
- *   driven purely by the rolling time window so an attacker cannot
- *   alternate abuse/clean/abuse to dodge the lock.
+ *   driven purely by the 1-hour rolling window so an attacker cannot
+ *   alternate abuse/clean to dodge the lock.
  * - When the threshold is reached the counter resets so the next abusive
  *   burst (after the 24h lock expires) starts a fresh count.
- * - A SafetyAlert row is queued for the parent notification worker.
+ * - A SafetyAlert row is queued for the parent notification worker
+ *   exactly on the transition into locked state.
  */
 export async function recordAbuseStrike(
   repos: RepositoryContainer,
   userId: string,
   source: AbuseSource
 ): Promise<AbuseTrackResult> {
-  const user = await repos.users.findById(userId);
-  if (!user) {
-    return { newCount: 0, isLocked: false };
+  const result = await repos.users.atomicAbuseStrike(userId, {
+    windowMs: WINDOW_MS,
+    lockThreshold: LOCK_THRESHOLD,
+    lockDurationMs: LOCK_DURATION_MS
+  });
+
+  if (result.justLocked && result.lockedUntil) {
+    await queueSafetyAlert(repos, userId, source, result.lockedUntil);
   }
 
-  const now = new Date();
-  const lastAt = (user as any).abuseLastAt ? new Date((user as any).abuseLastAt) : null;
-  const withinWindow = lastAt !== null && now.getTime() - lastAt.getTime() < WINDOW_MS;
-  const previousCount = withinWindow ? Number((user as any).abuseCount || 0) : 0;
-  const newCount = previousCount + 1;
-
-  if (newCount >= LOCK_THRESHOLD) {
-    const lockedUntil = new Date(now.getTime() + LOCK_DURATION_MS);
-    await repos.users.updateUser(userId, {
-      abuseCount: 0,
-      abuseLastAt: now,
-      lockedUntil
-    } as any);
-
-    await queueSafetyAlert(repos, userId, source, lockedUntil);
-
-    return { newCount, isLocked: true, lockedUntil };
-  }
-
-  await repos.users.updateUser(userId, {
-    abuseCount: newCount,
-    abuseLastAt: now
-  } as any);
-
-  return { newCount, isLocked: false };
+  return {
+    newCount: result.newCount,
+    isLocked: result.isLocked,
+    lockedUntil: result.lockedUntil ?? undefined
+  };
 }
 
 async function queueSafetyAlert(

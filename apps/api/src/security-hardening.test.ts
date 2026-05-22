@@ -260,6 +260,278 @@ describe('Phase 15.5 Security Hardening — regression tests', () => {
     });
   });
 
+  describe('1-hour rolling window — counter resets only after the window', () => {
+    const { inMemoryRepos } = require('./repositories/inmemory');
+    const studentId = 'regression-window-student';
+    const opts = { windowMs: 60 * 60 * 1000, lockThreshold: 3, lockDurationMs: 24 * 60 * 60 * 1000 };
+
+    function freshUser() {
+      const existing = inMemoryState.users.findIndex(u => u.id === studentId);
+      if (existing !== -1) inMemoryState.users.splice(existing, 1);
+      inMemoryState.users.push({
+        id: studentId,
+        tenantId: 'test-tenant-id',
+        email: 'regression-window@example.com',
+        passwordHash: 'dummy',
+        nickname: 'ウィンドウ試験生徒',
+        role: 'STUDENT',
+        schoolYear: 1,
+        currentXp: 0,
+        level: 1,
+        streakCount: 0,
+        lastActiveDate: null,
+        parentalConsent: true,
+        aiHintCountToday: 0,
+        lastAiHintDate: null,
+        abuseCount: 0,
+        abuseLastAt: null,
+        lockedUntil: null,
+        badges: [],
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    beforeAll(() => {
+      jest.useFakeTimers();
+    });
+
+    afterAll(() => {
+      jest.useRealTimers();
+    });
+
+    beforeEach(() => {
+      freshUser();
+    });
+
+    it('strikes more than 1 hour apart do NOT accumulate (count resets to 1)', async () => {
+      const t0 = new Date('2026-06-01T10:00:00Z');
+      jest.setSystemTime(t0);
+
+      const r1 = await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      expect(r1.newCount).toBe(1);
+      expect(r1.isLocked).toBe(false);
+
+      // Advance 90 minutes — comfortably past the 60-min window
+      jest.setSystemTime(new Date(t0.getTime() + 90 * 60 * 1000));
+
+      const r2 = await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      expect(r2.newCount).toBe(1); // RESET, not 2
+      expect(r2.isLocked).toBe(false);
+    });
+
+    it('strikes within 1 hour accumulate and trigger lock at threshold', async () => {
+      const t0 = new Date('2026-06-01T10:00:00Z');
+      jest.setSystemTime(t0);
+
+      const r1 = await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      expect(r1.newCount).toBe(1);
+
+      jest.setSystemTime(new Date(t0.getTime() + 30 * 60 * 1000));
+      const r2 = await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      expect(r2.newCount).toBe(2);
+      expect(r2.isLocked).toBe(false);
+
+      jest.setSystemTime(new Date(t0.getTime() + 50 * 60 * 1000));
+      const r3 = await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      expect(r3.newCount).toBe(3);
+      expect(r3.isLocked).toBe(true);
+      expect(r3.justLocked).toBe(true);
+    });
+
+    it('two strikes within window then a third just past the window does NOT lock (drip pattern)', async () => {
+      const t0 = new Date('2026-06-01T10:00:00Z');
+      jest.setSystemTime(t0);
+      const r1 = await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      expect(r1.newCount).toBe(1);
+
+      jest.setSystemTime(new Date(t0.getTime() + 30 * 60 * 1000));
+      const r2 = await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      expect(r2.newCount).toBe(2);
+
+      // 3rd strike 61 minutes after the LAST strike — outside the window
+      jest.setSystemTime(new Date(t0.getTime() + 91 * 60 * 1000));
+      const r3 = await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      expect(r3.newCount).toBe(1); // window reset; the slow drip does NOT lock
+      expect(r3.isLocked).toBe(false);
+    });
+
+    it('a 24-hour lock expires and a fresh strike begins a new count', async () => {
+      const t0 = new Date('2026-06-01T10:00:00Z');
+      jest.setSystemTime(t0);
+
+      // Trip the lock with 3 strikes inside the window
+      await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      jest.setSystemTime(new Date(t0.getTime() + 10 * 60 * 1000));
+      await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      jest.setSystemTime(new Date(t0.getTime() + 20 * 60 * 1000));
+      const lockResult = await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      expect(lockResult.isLocked).toBe(true);
+
+      // Still locked 23h59m later
+      jest.setSystemTime(new Date(t0.getTime() + 20 * 60 * 1000 + 23 * 60 * 60 * 1000 + 59 * 60 * 1000));
+      const stillLocked = await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      expect(stillLocked.isLocked).toBe(true);
+      expect(stillLocked.justLocked).toBe(false);
+
+      // Advance past 24h+1min after the lock was set → lock has expired,
+      // counter should be allowed to accumulate from 1 again
+      jest.setSystemTime(new Date(t0.getTime() + 20 * 60 * 1000 + 24 * 60 * 60 * 1000 + 60 * 1000));
+      const fresh = await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      expect(fresh.isLocked).toBe(false);
+      expect(fresh.newCount).toBe(1);
+    });
+  });
+
+  describe('atomicAbuseStrike — concurrent strikes lock exactly once', () => {
+    const { inMemoryRepos } = require('./repositories/inmemory');
+    const studentId = 'regression-toctou-student';
+
+    beforeEach(() => {
+      // Reset target user state so each test starts with a clean counter.
+      const existing = inMemoryState.users.findIndex(u => u.id === studentId);
+      if (existing !== -1) inMemoryState.users.splice(existing, 1);
+      inMemoryState.users.push({
+        id: studentId,
+        tenantId: 'test-tenant-id',
+        email: 'regression-toctou@example.com',
+        passwordHash: 'dummy',
+        nickname: 'TOCTOU 試験生徒',
+        role: 'STUDENT',
+        schoolYear: 1,
+        currentXp: 0,
+        level: 1,
+        streakCount: 0,
+        lastActiveDate: null,
+        parentalConsent: true,
+        aiHintCountToday: 0,
+        lastAiHintDate: null,
+        abuseCount: 2, // Pre-loaded — next strike WOULD lock
+        abuseLastAt: new Date().toISOString(),
+        lockedUntil: null,
+        badges: [],
+        createdAt: new Date().toISOString(),
+      });
+    });
+
+    it('fires justLocked exactly once across concurrent strikes', async () => {
+      const opts = { windowMs: 60 * 60 * 1000, lockThreshold: 3, lockDurationMs: 24 * 60 * 60 * 1000 };
+
+      // Fire many strikes concurrently. Only the strike that flips the
+      // user into the locked state should report justLocked=true; the
+      // others must see the existing lock without re-firing notifications.
+      const results = await Promise.all(
+        Array.from({ length: 8 }, () => inMemoryRepos.users.atomicAbuseStrike(studentId, opts))
+      );
+
+      const justLockedCount = results.filter((r: any) => r.justLocked).length;
+      expect(justLockedCount).toBe(1);
+
+      // Every result should observe the user as locked
+      expect(results.every((r: any) => r.isLocked)).toBe(true);
+    });
+
+    it('does not increment counters for an already-locked user', async () => {
+      const opts = { windowMs: 60 * 60 * 1000, lockThreshold: 3, lockDurationMs: 24 * 60 * 60 * 1000 };
+
+      // Pre-lock the user
+      const user = inMemoryState.users.find(u => u.id === studentId)!;
+      user.abuseCount = 0;
+      user.lockedUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+      const result = await inMemoryRepos.users.atomicAbuseStrike(studentId, opts);
+      expect(result.isLocked).toBe(true);
+      expect(result.justLocked).toBe(false);
+
+      // The counter must NOT have moved
+      const after = inMemoryState.users.find(u => u.id === studentId)!;
+      expect(after.abuseCount).toBe(0);
+    });
+  });
+
+  describe('Right-to-Be-Forgotten covers SafetyAlert rows', () => {
+    const studentId = 'regression-rtbf-safety-alert-student';
+    let studentToken: string;
+
+    beforeAll(() => {
+      inMemoryState.users.push({
+        id: studentId,
+        tenantId: 'test-tenant-id',
+        email: 'regression-rtbf-safety@example.com',
+        passwordHash: 'dummy',
+        nickname: 'RTBF テスト生徒',
+        role: 'STUDENT',
+        schoolYear: 1,
+        currentXp: 0,
+        level: 1,
+        streakCount: 0,
+        lastActiveDate: null,
+        parentalConsent: true,
+        aiHintCountToday: 0,
+        lastAiHintDate: null,
+        abuseCount: 0,
+        abuseLastAt: null,
+        lockedUntil: null,
+        badges: [],
+        createdAt: new Date().toISOString(),
+      });
+      // Pre-existing safety alerts for this child
+      inMemoryState.safetyAlerts.push(
+        {
+          id: 'alert_rtbf_1',
+          childUserId: studentId,
+          alertType: 'ABUSE_HARD_LOCK',
+          payload: JSON.stringify({ source: 'hint' }),
+          status: 'QUEUED',
+          createdAt: new Date().toISOString(),
+          sentAt: null,
+        },
+        {
+          id: 'alert_rtbf_2',
+          childUserId: studentId,
+          alertType: 'ABUSE_HARD_LOCK',
+          payload: JSON.stringify({ source: 'hirameki' }),
+          status: 'SENT',
+          createdAt: new Date().toISOString(),
+          sentAt: new Date().toISOString(),
+        }
+      );
+      // Plant a safety alert belonging to a DIFFERENT user, which MUST survive
+      inMemoryState.safetyAlerts.push({
+        id: 'alert_rtbf_unrelated',
+        childUserId: 'some-other-user',
+        alertType: 'ABUSE_HARD_LOCK',
+        payload: '{}',
+        status: 'QUEUED',
+        createdAt: new Date().toISOString(),
+        sentAt: null,
+      });
+      studentToken = jwt.sign(
+        { userId: studentId, tenantId: 'test-tenant-id', role: 'STUDENT' },
+        JWT_SECRET
+      );
+    });
+
+    it('DELETE /api/users/me/data wipes the user\'s SafetyAlert rows without touching others', async () => {
+      // Sanity: both of this user's alerts exist
+      const before = inMemoryState.safetyAlerts.filter(a => a.childUserId === studentId);
+      expect(before.length).toBe(2);
+
+      const res = await request(app)
+        .delete('/api/users/me/data')
+        .set('Authorization', `Bearer ${studentToken}`);
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+
+      // All of THIS user's safety alerts gone
+      const remaining = inMemoryState.safetyAlerts.filter(a => a.childUserId === studentId);
+      expect(remaining.length).toBe(0);
+
+      // Unrelated user's safety alert MUST still exist
+      const unrelated = inMemoryState.safetyAlerts.find(a => a.id === 'alert_rtbf_unrelated');
+      expect(unrelated).toBeDefined();
+    });
+  });
+
   describe('Celebration HMAC token — payload tampering is rejected', () => {
     function makePayload(overrides: Partial<{ childId: string; attemptId: string; random: string; createdAt: number; expiresAt: number }> = {}) {
       return {
