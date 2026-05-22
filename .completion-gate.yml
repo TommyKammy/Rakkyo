@@ -1,0 +1,55 @@
+# .completion-gate.yml — project-level anti-pattern blocklist
+#
+# Drop a copy of this file at YOUR project's repo root and adjust the
+# patterns / paths. The completion-gate skill greps each pattern under
+# the given path; ANY hit fails the gate.
+#
+# Patterns are POSIX extended regex (grep -E). The gate treats them as
+# RAW regex — it does NOT apply YAML escape processing. Use a single
+# backslash to escape regex meta-characters (e.g. `Math\.random`).
+#
+# Paths are relative to the repo root. node_modules / .git / dist /
+# build / .next / migrations are always excluded automatically.
+
+forbidden_patterns:
+  # ── Weak randomness in security-sensitive code ────────────────────
+  - pattern: "Math\.random"
+    path: "apps/api/src"
+    reason: "Use crypto.randomUUID() or crypto.randomBytes() — Math.random is not crypto-secure."
+
+  # ── Deprecated JavaScript APIs ────────────────────────────────────
+  - pattern: "\.substr\("
+    path: "apps/api/src"
+    reason: "String.prototype.substr() is deprecated; use slice() or substring()."
+
+  # ── Hardcoded secrets in source ───────────────────────────────────
+  - pattern: "(api[_-]?key|secret|password)[[:space:]]*=[[:space:]]*\"[A-Za-z0-9]{16,}"
+    path: "."
+    reason: "Hardcoded secret literal in source — move to env via requireSecret()."
+
+  # ── SoC violation: direct DB client in routes ─────────────────────
+  - pattern: "^import[[:space:]]+prisma[[:space:]]+from"
+    path: "apps/api/src/routes"
+    reason: "Routes must talk to req.repos, never import Prisma directly."
+
+  - pattern: "constructor\.name[[:space:]]*===[[:space:]]*['\"]Prisma"
+    path: "apps/api/src"
+    reason: "Branching on class name breaks under minification — add a Repository method instead."
+
+  # ── Zod schemas without length caps ───────────────────────────────
+  # Matches `z.string()` that isn't followed by `.max(`, `.min(`, `.uuid(` or `.email(`
+  # on the same line — a common DoS source.
+  - pattern: "z\.string\(\)[[:space:]]*(,|\)|}|;)"
+    path: "apps/api/src"
+    reason: "z.string() without .max() / .uuid() / .email() — add a length cap."
+
+  # ── Unsafe URL query secrets ──────────────────────────────────────
+  - pattern: "[?&]api[_-]?key="
+    path: "apps/api/src"
+    reason: "API key in URL query string — use an Authorization or X-*-Api-Key header instead."
+
+  # ── Console.log left behind ───────────────────────────────────────
+  # Allow console.warn / console.error; flag bare console.log only.
+  - pattern: "^[[:space:]]*console\.log\("
+    path: "apps/api/src"
+    reason: "Bare console.log in production source. Use console.warn/error with a structured payload."
