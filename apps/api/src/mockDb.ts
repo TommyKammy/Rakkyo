@@ -66,6 +66,8 @@ export interface AttemptMock {
   answerSubmitted: string;
   durationSeconds?: number | null;
   createdAt: string;
+  errorType?: string | null;
+  aiDiagnosis?: string | null;
 }
 
 export interface ParentMessageMock {
@@ -85,6 +87,7 @@ class MockDatabase {
   assignmentProgresses: StudentAssignmentProgressMock[] = [];
   attempts: AttemptMock[] = [];
   parentMessages: ParentMessageMock[] = [];
+  dynamicQuestions: any[] = [];
 
   constructor() {
     // Seed default B2C tenant
@@ -220,7 +223,9 @@ class MockDatabase {
         hintsUsed: 3,
         answerSubmitted: '3', // Wrong answer
         durationSeconds: 52,
-        createdAt: getPastDate(3, 17 + 10)
+        createdAt: getPastDate(3, 17 + 10),
+        errorType: 'conceptual_error',
+        aiDiagnosis: 'わり算の符号のルールを間違えちゃったみたいだね。マイナスの数が1つ奇数個あるときは、答えの符号はマイナスになるよ！ 🧅'
       },
       // 2 days ago - Unit 1
       {
@@ -262,7 +267,9 @@ class MockDatabase {
         hintsUsed: 1,
         answerSubmitted: '11', // Wrong answer
         durationSeconds: 37,
-        createdAt: getPastDate(1, 18 + 12)
+        createdAt: getPastDate(1, 18 + 12),
+        errorType: 'careless_mistake',
+        aiDiagnosis: '代入したあとの掛け算で、符号のミスがあったかもしれないね。$5 \\times (-3)$ は $-15$ になるよ。そこにもう一度 $+4$ を足してみて！ 🧅'
       },
       // Today - Unit 2
       {
@@ -454,11 +461,6 @@ class MockDatabase {
       createdAt: new Date().toISOString(),
     };
     this.attempts.push(newAttempt);
-
-    // If this attempt is for a lesson that has an assignment, check if the student has completed the assignment
-    // (For simplicity, we assume if they complete a question in that lesson, it might contribute to assignment completion)
-    // Actually, in actual integration they will submit and if completed we update the assignment.
-    
     return newAttempt;
   }
 
@@ -489,6 +491,21 @@ class MockDatabase {
       return true;
     }
     return false;
+  }
+
+  // Dynamic question helpers
+  createDynamicQuestion(question: any): any {
+    const newQ = {
+      ...question,
+      id: question.id || 'q_dynamic_' + Math.random().toString(36).substr(2, 9),
+      isDynamic: true
+    };
+    this.dynamicQuestions.push(newQ);
+    return newQ;
+  }
+
+  findDynamicQuestion(id: string): any {
+    return this.dynamicQuestions.find(q => q.id === id);
   }
 }
 

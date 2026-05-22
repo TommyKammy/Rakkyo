@@ -4,7 +4,7 @@ import prisma from '../db';
 import { mockDb } from '../mockDb';
 import { authMiddleware, AuthenticatedRequest } from '../middlewares/auth';
 import { allCurriculums } from '@rakkyo/curriculum';
-import { AiTutorProviderFactory, AiResponseCache, SafetyFilter } from '@rakkyo/ai-tutor';
+import { AiTutorProviderFactory, AiResponseCache, SafetyFilter, AttemptSummary } from '@rakkyo/ai-tutor';
 
 const router = Router();
 
@@ -151,6 +151,29 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
     // Grit retry bonus: 30 XP, Review: 25 XP, Normal: 10 XP
     const xpAwarded = isCorrect ? (isGritBonus ? 30 : (parsed.isReview ? 25 : 10)) : 0;
 
+    // Precise Mistake Diagnosis
+    let errorType: string | null = null;
+    let aiDiagnosis: string | null = null;
+
+    if (!isCorrect) {
+      try {
+        const provider = AiTutorProviderFactory.getProvider();
+        const explanation = foundQuestion?.explanation || "";
+        const answers = foundQuestion?.answers || [];
+        const diagnosis = await provider.diagnoseMistake({
+          prompt: foundQuestion?.prompt || parsed.questionId,
+          explanation,
+          answers,
+          answerSubmitted: parsed.answerSubmitted,
+          subjectCode: 'math'
+        });
+        errorType = diagnosis.errorType;
+        aiDiagnosis = diagnosis.aiDiagnosis;
+      } catch (diagError) {
+        console.error('Failed to run AI diagnosis:', diagError);
+      }
+    }
+
     // Check quest progress after adding current attempt (simulate)
     const currentAttemptFake = {
       userId,
@@ -159,7 +182,9 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
       hintsUsed: parsed.hintsUsed,
       answerSubmitted: parsed.answerSubmitted,
       durationSeconds: parsed.durationSeconds,
-      createdAt: now.toISOString()
+      createdAt: now.toISOString(),
+      errorType,
+      aiDiagnosis
     };
     const todayAttemptsAfter = [...todayAttemptsBefore, currentAttemptFake];
     const questsAfter = checkQuestsCompleted(todayAttemptsAfter);
@@ -209,6 +234,8 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
         hintsUsed: parsed.hintsUsed,
         answerSubmitted: parsed.answerSubmitted,
         durationSeconds: parsed.durationSeconds,
+        errorType,
+        aiDiagnosis
       });
 
       const allMockAttempts = mockDb.getUserAttempts(userId);
@@ -299,6 +326,8 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
             hintsUsed: parsed.hintsUsed,
             answerSubmitted: parsed.answerSubmitted,
             durationSeconds: parsed.durationSeconds,
+            errorType,
+            aiDiagnosis
           }
         });
 
@@ -445,6 +474,8 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
       questUnlocked,
       leveledUp,
       newBadges,
+      errorType,
+      aiDiagnosis,
       user: {
         id: user.id,
         email: user.email,
@@ -638,7 +669,8 @@ router.post('/hint', authMiddleware, async (req: AuthenticatedRequest, res: Resp
       hintsUsed: parsed.hintsUsed,
       staticHints: foundQuestion.hints,
       subjectCode,
-      userQuestion: parsed.userQuestion
+      userQuestion: parsed.userQuestion,
+      isSocratic: parsed.hintsUsed >= 2
     });
 
     // AI呼び出しが成功したため、使用回数を更新
@@ -1128,6 +1160,188 @@ router.post('/hint/cache/clear', authMiddleware, async (req: AuthenticatedReques
     });
   } catch (error) {
     console.error('Lessons cache clear error:', error);
+    res.status(500).json({ error: 'サーバーエラーが発生しました。' });
+  }
+});
+
+// 3. POST /lessons/recommend-similar
+router.post('/recommend-similar', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const isMock = !!req.isMock;
+    const { questionId } = z.object({ questionId: z.string() }).parse(req.body);
+
+    let foundQuestion: any = null;
+    let latestAttempt: any = null;
+
+    if (!isMock) {
+      try {
+        foundQuestion = await prisma.question.findUnique({ where: { id: questionId } });
+        latestAttempt = await prisma.attempt.findFirst({
+          where: { userId, questionId },
+          orderBy: { createdAt: 'desc' }
+        });
+      } catch (e) {
+        console.warn('DB search failed in recommend-similar, falling back to static/mock.');
+      }
+    }
+
+    if (!foundQuestion) {
+      // Search in curriculum
+      for (const curriculum of allCurriculums) {
+        for (const unit of curriculum.units) {
+          for (const lesson of unit.lessons) {
+            const q = lesson.questions.find(quest => quest.id === questionId || quest.prompt === questionId);
+            if (q) {
+              foundQuestion = q;
+              break;
+            }
+          }
+          if (foundQuestion) break;
+        }
+        if (foundQuestion) break;
+      }
+      latestAttempt = mockDb.getUserAttempts(userId)
+        .filter(a => a.questionId === questionId)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    }
+
+    if (!foundQuestion) {
+      res.status(404).json({ error: '元の問題が見つかりませんでした。' });
+      return;
+    }
+
+    // Call AI to generate similar question
+    const provider = AiTutorProviderFactory.getProvider();
+    const similarQResult = await provider.generateSimilarQuestion({
+      prompt: foundQuestion.prompt,
+      explanation: foundQuestion.explanation,
+      answers: foundQuestion.answers,
+      errorType: (latestAttempt?.errorType as any) || 'conceptual_error',
+      aiDiagnosis: latestAttempt?.aiDiagnosis || 'もう一度ゆっくり考えてみよう！',
+      subjectCode: 'math'
+    });
+
+    let savedQuestion: any = null;
+    if (!isMock) {
+      try {
+        // Find a lesson to associate the dynamic question with
+        const firstLesson = await prisma.lesson.findFirst();
+        savedQuestion = await prisma.question.create({
+          data: {
+            lessonId: foundQuestion.lessonId || firstLesson?.id || 'dynamic-lesson',
+            type: foundQuestion.type || 'NUMBER_INPUT',
+            prompt: similarQResult.prompt,
+            answers: similarQResult.answers,
+            options: similarQResult.options,
+            explanation: similarQResult.explanation,
+            hints: similarQResult.hints,
+            isDynamic: true
+          }
+        });
+      } catch (e) {
+        console.error('Failed to save dynamic question to DB, falling back to mock:', e);
+        savedQuestion = mockDb.createDynamicQuestion(similarQResult);
+      }
+    } else {
+      savedQuestion = mockDb.createDynamicQuestion(similarQResult);
+    }
+
+    res.json(savedQuestion);
+  } catch (error) {
+    console.error('Recommend similar question error:', error);
+    res.status(500).json({ error: 'サーバーエラーが発生しました。' });
+  }
+});
+
+// 4. GET /lessons/recommendations
+router.get('/recommendations', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const user = req.user;
+    const isMock = !!req.isMock;
+
+    let attempts: AttemptSummary[] = [];
+    if (!isMock) {
+      try {
+        const dbAttempts = await prisma.attempt.findMany({
+          where: { userId },
+          include: { question: { include: { lesson: true } } },
+          orderBy: { createdAt: 'desc' },
+          take: 10
+        });
+        attempts = dbAttempts.map(a => ({
+          lessonId: a.question?.lessonId || 'unknown',
+          lessonName: a.question?.lesson?.name || 'unknown',
+          isCorrect: a.isCorrect,
+          hintsUsed: a.hintsUsed,
+          errorType: a.errorType,
+          aiDiagnosis: a.aiDiagnosis,
+          createdAt: a.createdAt.toISOString()
+        }));
+      } catch (e) {
+        console.warn('Failed to fetch DB attempts for recommendation, falling back to mockDb.');
+      }
+    }
+
+    if (attempts.length === 0) {
+      const mockAttempts = mockDb.getUserAttempts(userId);
+      attempts = mockAttempts.map(a => ({
+        lessonId: 'lesson-1', // Mock association
+        lessonName: '正負の数の計算',
+        isCorrect: a.isCorrect,
+        hintsUsed: a.hintsUsed,
+        errorType: a.errorType,
+        aiDiagnosis: a.aiDiagnosis,
+        createdAt: a.createdAt
+      }));
+    }
+
+    // Collect available lessons
+    const availableLessons: { id: string; name: string; unitName: string }[] = [];
+    if (!isMock) {
+      try {
+        const dbLessons = await prisma.lesson.findMany({
+          include: { unit: true },
+          take: 5
+        });
+        dbLessons.forEach(l => {
+          availableLessons.push({
+            id: l.id,
+            name: l.name,
+            unitName: l.unit.name
+          });
+        });
+      } catch (e) {
+        console.warn('DB lessons fetch failed for recommendation, using static.');
+      }
+    }
+
+    if (availableLessons.length === 0) {
+      // Use static curriculums
+      for (const curriculum of allCurriculums) {
+        for (const unit of curriculum.units) {
+          for (const lesson of unit.lessons) {
+            availableLessons.push({
+              id: lesson.name, // Fake ID
+              name: lesson.name,
+              unitName: unit.name
+            });
+          }
+        }
+      }
+    }
+
+    const provider = AiTutorProviderFactory.getProvider();
+    const recommendation = await provider.generateRecommendation({
+      studentNickname: user.nickname || '生徒',
+      attempts,
+      availableLessons
+    });
+
+    res.json(recommendation);
+  } catch (error) {
+    console.error('Lessons recommendation error:', error);
     res.status(500).json({ error: 'サーバーエラーが発生しました。' });
   }
 });

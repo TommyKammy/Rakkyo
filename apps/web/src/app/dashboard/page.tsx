@@ -5,6 +5,48 @@ import { useRouter } from "next/navigation";
 import { CongratsOverlay } from "./components/CongratsOverlay";
 import { ClosetModal } from "./components/ClosetModal";
 import { RakkyoMascot } from "./components/RakkyoMascot";
+import { useRakkyoVoice } from "../../hooks/useRakkyoVoice";
+
+// Helper to map dynamic/mock lesson IDs into numericカリキュラムIDs for seamless navigation
+const getNumericLessonId = (recommendation: { recommendedLessonId: string; recommendedLessonName: string }): number => {
+  const idStr = recommendation.recommendedLessonId;
+  const nameStr = recommendation.recommendedLessonName || "";
+  
+  // Try parsing direct integer
+  const directInt = parseInt(idStr);
+  if (!isNaN(directInt) && directInt >= 1 && directInt <= 15) {
+    return directInt;
+  }
+  
+  // Extract number from format like "lesson-1"
+  const match = idStr.match(/lesson[-_](\d+)/i);
+  if (match) {
+    const matchedInt = parseInt(match[1]);
+    if (matchedInt >= 1 && matchedInt <= 15) {
+      return matchedInt;
+    }
+  }
+
+  // Fallback map based on name or ID keywords
+  const text = (idStr + " " + nameStr).toLowerCase();
+  if (text.includes("正負") || text.includes("数")) return 1;
+  if (text.includes("文字") || text.includes("式")) return 2;
+  if (text.includes("方程式") || text.includes("等式")) return 3;
+  if (text.includes("アルファベット") || text.includes("alphabet")) return 4;
+  if (text.includes("単語") || text.includes("word") || text.includes("be動詞")) return 5;
+  if (text.includes("一般動詞") || text.includes("verb")) return 6;
+  if (text.includes("植物") || text.includes("理科") || text.includes("光")) return 7;
+  if (text.includes("物質") || text.includes("音")) return 8;
+  if (text.includes("力") || text.includes("電気")) return 9;
+  if (text.includes("世界") || text.includes("地理")) return 10;
+  if (text.includes("歴史") || text.includes("歴史の流れ")) return 11;
+  if (text.includes("くらし") || text.includes("社会")) return 12;
+  if (text.includes("ことば") || text.includes("国語") || text.includes("漢字")) return 13;
+  if (text.includes("きまり") || text.includes("文法")) return 14;
+  if (text.includes("読解") || text.includes("文章")) return 15;
+
+  return 1; // absolute fallback
+};
 
 interface UserProfile {
   id: string;
@@ -68,6 +110,18 @@ export default function StudentDashboard() {
     streakCount?: number;
     level?: number;
   } | null>(null);
+
+  // Phase 11 Personalization States
+  interface RecommendationResult {
+    recommendedLessonId: string;
+    recommendedLessonName: string;
+    reason: string;
+    isMock: boolean;
+  }
+
+  const [recommendation, setRecommendation] = useState<RecommendationResult | null>(null);
+  const [isLoadingRecommend, setIsLoadingRecommend] = useState(false);
+  const { speak, stop } = useRakkyoVoice();
 
   const fetchParentMessages = async (token: string) => {
     try {
@@ -169,6 +223,41 @@ export default function StudentDashboard() {
     }
   };
 
+  const fetchRecommendations = async (token: string, nickname: string) => {
+    setIsLoadingRecommend(true);
+    try {
+      const response = await fetch("http://localhost:4000/api/lessons/recommendations", {
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setRecommendation(data);
+        if (data.reason) {
+          setMascotMessage(data.reason);
+          // Auto speak recommended reason smoothly
+          speak(data.reason, 'neutral');
+        }
+      } else {
+        throw new Error("Failed to fetch recommendation");
+      }
+    } catch (e) {
+      console.warn("⚠️ Failed to fetch recommendations from API. Using local fallback.");
+      const mockRecommend: RecommendationResult = {
+        recommendedLessonId: "1",
+        recommendedLessonName: "正負の数の計算",
+        reason: `やっほー！${nickname}ちゃん、今日は「正負の数の計算」でいっしょに遊ぼう！マイナスの魔法をマスターすると、算数の冒険がもっと楽しくなるよ！🧅`,
+        isMock: true
+      };
+      setRecommendation(mockRecommend);
+      setMascotMessage(mockRecommend.reason);
+      speak(mockRecommend.reason, 'neutral');
+    } finally {
+      setIsLoadingRecommend(false);
+    }
+  };
+
   useEffect(() => {
     const token = localStorage.getItem("rakkyo_token");
     const userStr = localStorage.getItem("rakkyo_user");
@@ -189,20 +278,17 @@ export default function StudentDashboard() {
       fetchReviews(token, parsedUser.id);
       fetchParentMessages(token);
       fetchQuests(token);
-
-      // Mascot dynamic messages based on current states
-      const messages = [
-        `ようこそ、${parsedUser.nickname}ちゃん！今日もいっしょに算数を大冒険しよう！`,
-        `🔥 ${parsedUser.streakCount}日連続で勉強できてるよ！すごすぎる！`,
-        `あと少しのXPでレベルアップできそうだよ！がんばろう！`,
-        `今日は「方程式」のレッスンがおすすめだよ！天秤のパズルを解いてみよう！`,
-      ];
-      setMascotMessage(messages[0]);
+      fetchRecommendations(token, parsedUser.nickname);
     } catch (e) {
       localStorage.removeItem("rakkyo_token");
       localStorage.removeItem("rakkyo_user");
       router.push("/");
     }
+
+    // Clean up voice synthesis on unmount
+    return () => {
+      stop();
+    };
   }, [router]);
 
   const handleLogout = () => {
@@ -409,6 +495,58 @@ export default function StudentDashboard() {
           </div>
         </div>
       </section>
+
+      {/* Today's Recommended Lesson Card (Hyper-Personalized AI) */}
+      {recommendation && (
+        <section className="bg-gradient-to-r from-indigo-50 to-pastel-purple/20 border-3 border-pastel-purple-border rounded-3xl p-6 bubbly-shadow relative overflow-hidden transition-all duration-300 hover:shadow-md">
+          {/* Decorative Elements */}
+          <div className="absolute right-4 top-4 text-3xl opacity-20 animate-pulse">✨</div>
+          <div className="absolute left-1/3 bottom-2 text-2xl opacity-10 animate-bounce">🧅</div>
+          
+          <div className="flex flex-col md:flex-row items-center justify-between gap-6 relative z-10">
+            <div className="flex-1 space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-2xs bg-indigo-600/10 text-indigo-700 border border-indigo-200 px-3 py-1 rounded-full font-extrabold tracking-wider flex items-center gap-1">
+                  🌟 AIがえらんだ今日のおすすめ
+                </span>
+                {recommendation.isMock && (
+                  <span className="text-3xs bg-pastel-yellow border border-pastel-yellow-border text-pastel-yellow-dark px-2 py-0.5 rounded-full font-bold">
+                    体験版おすすめ
+                  </span>
+                )}
+              </div>
+              
+              <h3 className="text-lg sm:text-xl font-extrabold text-slate-800 flex items-center gap-2">
+                🧅 {recommendation.recommendedLessonName}
+              </h3>
+              
+              <p className="text-sm font-semibold text-slate-600 bg-white/60 backdrop-blur-sm border border-slate-100/50 p-4 rounded-2xl leading-relaxed">
+                {recommendation.reason}
+              </p>
+            </div>
+            
+            <div className="flex flex-col sm:flex-row md:flex-col gap-3 w-full md:w-auto flex-shrink-0">
+              <button
+                onClick={() => speak(recommendation.reason, 'neutral')}
+                className="px-6 py-3.5 bg-white hover:bg-slate-50 border-2 border-slate-200 text-slate-700 font-extrabold rounded-2xl text-xs flex items-center justify-center gap-2 active:translate-y-[1px] transition-all bubbly-shadow cursor-pointer select-none"
+              >
+                <span>🔊 もう一回きく</span>
+              </button>
+              
+              <button
+                onClick={() => {
+                  stop();
+                  const targetId = getNumericLessonId(recommendation);
+                  router.push(`/lesson/${targetId}`);
+                }}
+                className="px-8 py-3.5 bg-indigo-600 hover:bg-indigo-500 border-2 border-indigo-700 text-white font-extrabold rounded-2xl text-xs flex items-center justify-center gap-2 active:translate-y-[2px] transition-all bubbly-shadow cursor-pointer shadow-lg shadow-indigo-600/20 select-none font-black"
+              >
+                <span>冒険へ出発する！ 🧅</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* 3. Main Dashboard Content Grid */}
       <main className="grid grid-cols-1 md:grid-cols-3 gap-6">

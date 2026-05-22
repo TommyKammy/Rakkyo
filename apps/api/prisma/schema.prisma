@@ -179,6 +179,7 @@ model Question {
   explanation String
   hints       String[]     // Fallback static hints
   attempts    Attempt[]
+  isDynamic   Boolean      @default(false)
 }
 
 model Attempt {
@@ -192,6 +193,8 @@ model Attempt {
   answerSubmitted String
   durationSeconds Int?     // Time in seconds to complete the question
   createdAt       DateTime @default(now())
+  errorType       String?
+  aiDiagnosis     String?
 }
 
 model Badge {

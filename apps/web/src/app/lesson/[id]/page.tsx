@@ -12,6 +12,7 @@ import {
 import { NumberLineDiagram, AlgebraScaleDiagram, CoordinatePlaneDiagram } from "../../../components/diagrams";
 import { RakkyoMascot } from "../../dashboard/components/RakkyoMascot";
 import { CongratsOverlay } from "../../dashboard/components/CongratsOverlay";
+import { useRakkyoVoice } from "../../../hooks/useRakkyoVoice";
 
 // Helper to detect math diagram types based on curriculum contents
 function getMathDiagram(prompt: string, explanation: string = ""): React.ReactNode {
@@ -197,6 +198,17 @@ function ExerciseScreenContent() {
   const questions = lesson?.questions || [];
 
   const theme = subjectThemes[subjectCode] || subjectThemes.math;
+
+  const { speak, stop } = useRakkyoVoice();
+  const [activeQuestions, setActiveQuestions] = useState<any[]>([]);
+  const [aiDiagnosis, setAiDiagnosis] = useState<string | null>(null);
+  const [isLoadingSimilar, setIsLoadingSimilar] = useState(false);
+
+  useEffect(() => {
+    if (questions && questions.length > 0) {
+      setActiveQuestions(questions);
+    }
+  }, [questions]);
 
   // User details
   const [user, setUser] = useState<UserProfile | null>(null);
@@ -503,6 +515,7 @@ function ExerciseScreenContent() {
       if (response.ok) {
         const data = await response.json();
         setAiHints(prev => ({ ...prev, [stageNum]: data.hintText }));
+        speak(data.hintText, "neutral");
       }
     } catch (e) {
       console.warn("⚠️ Failed to fetch AI hint. Falling back to static curriculum hints.", e);
@@ -540,7 +553,7 @@ function ExerciseScreenContent() {
     }
   }, [router, subjectCode, unit, lesson]);
 
-  if (!user || questions.length === 0) {
+  if (!user || activeQuestions.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center bg-slate-50">
         <div className="animate-spin rounded-full h-12 w-12 border-4 border-pastel-blue-border border-t-pastel-blue-dark" />
@@ -548,7 +561,7 @@ function ExerciseScreenContent() {
     );
   }
 
-  const currentQuestion = questions[currentQIdx];
+  const currentQuestion = activeQuestions[currentQIdx];
 
   const handleCheckAnswer = async () => {
     if (isChecked) return;
@@ -568,7 +581,7 @@ function ExerciseScreenContent() {
 
     // Check locally first for instant evaluation/fallback
     const isAnsCorrect = currentQuestion.answers.some(
-      (ans) => ans.toLowerCase().trim() === submitted.toLowerCase().trim()
+      (ans: string) => ans.toLowerCase().trim() === submitted.toLowerCase().trim()
     );
 
     setIsCorrect(isAnsCorrect);
@@ -597,8 +610,15 @@ function ExerciseScreenContent() {
 
           if (data.isCorrect) {
             setMascotEmotion('correct');
+            speak("正解！すごすぎるよ！ラッキョくんも大喜びだよ！", "correct");
           } else {
             setMascotEmotion('incorrect');
+            if (data.aiDiagnosis) {
+              setAiDiagnosis(data.aiDiagnosis);
+              speak(data.aiDiagnosis, "incorrect");
+            } else {
+              speak("おしい！ちがうみたいだね。となりのラッキョくんにヒントを聞いてみよう！", "incorrect");
+            }
           }
 
           if (data.leveledUp) {
@@ -638,6 +658,7 @@ function ExerciseScreenContent() {
     // Local fallback evaluation (offline mode)
     if (isAnsCorrect) {
       setMascotEmotion('correct');
+      speak("正解！すごすぎるよ！ラッキョくんも大喜びだよ！", "correct");
       // Award XP (+25 XP for review, +10 XP normally)
       const xpAwarded = isReview ? 25 : 10;
       const updatedUser = { ...user };
@@ -667,6 +688,50 @@ function ExerciseScreenContent() {
       localStorage.setItem("rakkyo_user", JSON.stringify(updatedUser));
     } else {
       setMascotEmotion('incorrect');
+      speak("おしい！ちがうみたいだね。となりのラッキョくんにヒントを聞いてみよう！", "incorrect");
+    }
+  };
+
+  const handleRecommendSimilar = async () => {
+    const token = localStorage.getItem("rakkyo_token");
+    if (!token) return;
+    setIsLoadingSimilar(true);
+    try {
+      const response = await fetch("http://localhost:4000/api/lessons/recommend-similar", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          questionId: currentQuestion.id || currentQuestion.prompt
+        })
+      });
+      if (response.ok) {
+        const newQ = await response.json();
+        const updated = [...activeQuestions];
+        updated[currentQIdx] = newQ;
+        setActiveQuestions(updated);
+        
+        // Reset states
+        setSelectedOption(null);
+        setTextAnswer("");
+        setIsChecked(false);
+        setIsCorrect(false);
+        setShowHintPanel(false);
+        setHintStage(1);
+        setShowFinalAnswer(false);
+        setAiHints({});
+        setAiDiagnosis(null);
+        setMascotEmotion('normal');
+        setStartTime(Date.now());
+        
+        speak("新しく似た問題を用意したよ！もう一度一緒にがんばろう！", "neutral");
+      }
+    } catch (e) {
+      console.warn("⚠️ Failed to fetch similar question:", e);
+    } finally {
+      setIsLoadingSimilar(false);
     }
   };
 
@@ -680,18 +745,17 @@ function ExerciseScreenContent() {
     setHintStage(1);
     setShowFinalAnswer(false);
     setAiHints({});
+    setAiDiagnosis(null);
     setMascotEmotion('normal'); // Reset mascot emotion
 
     // Clear speech states
-    if (typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
+    stop();
     setIsPlayingTts(null);
     setSpeechText("");
     setChatHistory([]);
     setIsListening(false);
 
-    if (currentQIdx + 1 < questions.length) {
+    if (currentQIdx + 1 < activeQuestions.length) {
       setCurrentQIdx(currentQIdx + 1);
     } else {
       // Cleared entire unit lesson!
@@ -774,7 +838,7 @@ function ExerciseScreenContent() {
               {/* MULTIPLE CHOICE GRID */}
               {(currentQuestion.type === "MULTIPLE_CHOICE" || currentQuestion.type === "SINGLE_CHOICE") && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {currentQuestion.options.map((opt, idx) => (
+                  {currentQuestion.options.map((opt: string, idx: number) => (
                     <button
                       key={idx}
                       disabled={isChecked}
@@ -819,22 +883,54 @@ function ExerciseScreenContent() {
 
             {/* Response Alerts after validation */}
             {isChecked && (
-              <div className={`border-3 p-5 rounded-3xl flex items-center gap-4 ${
-                isCorrect
-                  ? "bg-pastel-green border-pastel-green-border text-pastel-green-dark"
-                  : "bg-pastel-pink border-pastel-pink-border text-pastel-pink-dark"
-              }`}>
-                <span className="text-3xl select-none">{isCorrect ? "🎉" : "😭"}</span>
-                <div>
-                  <h4 className="font-extrabold text-sm">
-                    {isCorrect ? "正解！すごすぎる！" : "おしい！ちがうみたい..."}
-                  </h4>
-                  <p className="text-xs font-semibold mt-1 opacity-90 leading-relaxed">
-                    {isCorrect
-                      ? "この調子で次の問題もクリアして、XPをたくさん集めよう！"
-                      : "大丈夫だよ！となりのラッキョくんにヒントを聞いてみよう！"}
-                  </p>
+              <div className="space-y-4">
+                <div className={`border-3 p-5 rounded-3xl flex items-center gap-4 ${
+                  isCorrect
+                    ? "bg-pastel-green border-pastel-green-border text-pastel-green-dark"
+                    : "bg-pastel-pink border-pastel-pink-border text-pastel-pink-dark"
+                }`}>
+                  <span className="text-3xl select-none">{isCorrect ? "🎉" : "😭"}</span>
+                  <div className="flex-1">
+                    <h4 className="font-extrabold text-sm">
+                      {isCorrect ? "正解！すごすぎる！" : "おしい！ちがうみたい..."}
+                    </h4>
+                    <p className="text-xs font-semibold mt-1 opacity-90 leading-relaxed">
+                      {isCorrect
+                        ? "この調子で次の問題もクリアして、XPをたくさん集めよう！"
+                        : aiDiagnosis
+                          ? aiDiagnosis
+                          : "大丈夫だよ！となりのラッキョくんにヒントを聞いてみよう！"}
+                    </p>
+                  </div>
+                  {!isCorrect && aiDiagnosis && (
+                    <button
+                      onClick={() => speak(aiDiagnosis, "incorrect")}
+                      className="px-2.5 py-1 rounded-lg border border-pastel-pink-border bg-white text-3xs font-extrabold text-pastel-pink-dark flex-shrink-0 cursor-pointer"
+                    >
+                      🔊 もう一度きく
+                    </button>
+                  )}
                 </div>
+
+                {/* Recommend Similar Question Button (Phase 11) */}
+                {!isCorrect && (
+                  <div className="flex justify-end">
+                    <button
+                      disabled={isLoadingSimilar}
+                      onClick={handleRecommendSimilar}
+                      className="px-5 py-3 bg-pastel-yellow border-2 border-pastel-yellow-border text-pastel-yellow-dark font-extrabold rounded-2xl text-xs hover:bg-yellow-100/50 active:translate-y-[2px] disabled:opacity-50 transition-all bubbly-shadow cursor-pointer flex items-center gap-1.5"
+                    >
+                      {isLoadingSimilar ? (
+                        <>
+                          <span className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-pastel-yellow-border border-t-pastel-yellow-dark" />
+                          <span>類題を作成中... 🧅</span>
+                        </>
+                      ) : (
+                        <span>もう一回！似た問題に挑戦する 🧅</span>
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
