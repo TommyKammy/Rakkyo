@@ -50,6 +50,24 @@ export class PrismaAvatarRepository implements AvatarRepository {
     });
   }
 
+  async updateAvatarStatusAtomic(id: string, expectedStatus: string, newStatus: string, rejectionReason?: string | null): Promise<Avatar | null> {
+    return prisma.$transaction(async (tx) => {
+      const avatar = await tx.avatar.findUnique({
+        where: { id }
+      });
+      if (!avatar || avatar.status !== expectedStatus) {
+        return null;
+      }
+      return tx.avatar.update({
+        where: { id },
+        data: {
+          status: newStatus,
+          rejectionReason: rejectionReason || null
+        }
+      });
+    }, { isolationLevel: 'Serializable' });
+  }
+
   async deleteAvatars(ids: string[]): Promise<void> {
     await prisma.avatar.deleteMany({
       where: { id: { in: ids } }

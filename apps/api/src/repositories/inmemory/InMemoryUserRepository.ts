@@ -171,6 +171,9 @@ export class InMemoryUserRepository implements UserRepository {
     inMemoryState.classEnrollments = inMemoryState.classEnrollments.filter(e => e.userId !== userId);
     inMemoryState.assignmentProgresses = inMemoryState.assignmentProgresses.filter(p => p.studentId !== userId);
     inMemoryState.safetyAlerts = inMemoryState.safetyAlerts.filter(a => a.childUserId !== userId);
+    inMemoryState.parentChildRelations = inMemoryState.parentChildRelations.filter(
+      r => r.parentId !== userId && r.childId !== userId
+    );
     inMemoryState.users = inMemoryState.users.filter(u => u.id !== userId);
 
     // Physically delete from StorageService

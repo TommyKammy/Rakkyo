@@ -17,6 +17,7 @@ export interface AvatarRepository {
     objectKey: string;
   }): Promise<Avatar>;
   updateAvatarStatus(id: string, status: string, rejectionReason?: string | null): Promise<Avatar>;
+  updateAvatarStatusAtomic(id: string, expectedStatus: string, newStatus: string, rejectionReason?: string | null): Promise<Avatar | null>;
   deleteAvatars(ids: string[]): Promise<void>;
   findExpiredAvatars(cutoff: Date): Promise<Avatar[]>;
   

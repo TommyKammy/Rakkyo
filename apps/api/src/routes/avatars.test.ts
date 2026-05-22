@@ -578,7 +578,13 @@ describe('AI Avatar Maker Integration Tests (Phase 16-B)', () => {
       const quotas = inMemoryState.avatarQuotas.filter(q => q.userId === studentSchoolId);
       expect(quotas).toHaveLength(0);
 
-      // 4. Verify physical image objects are physically deleted from storage service
+      // 4. Verify parentChildRelations are cascaded and deleted
+      const relations = inMemoryState.parentChildRelations.filter(
+        r => r.parentId === studentSchoolId || r.childId === studentSchoolId
+      );
+      expect(relations).toHaveLength(0);
+
+      // 5. Verify physical image objects are physically deleted from storage service
       candidateKeys.forEach(key => {
         expect(storageService.hasObject(key)).toBe(false);
       });

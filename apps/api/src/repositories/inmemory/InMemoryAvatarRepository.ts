@@ -98,6 +98,18 @@ export class InMemoryAvatarRepository implements AvatarRepository {
     return this.mapMockToAvatar(mock);
   }
 
+  async updateAvatarStatusAtomic(id: string, expectedStatus: string, newStatus: string, rejectionReason?: string | null): Promise<Avatar | null> {
+    const mock = inMemoryState.avatars.find(a => a.id === id);
+    if (!mock || mock.status !== expectedStatus) {
+      return null;
+    }
+    
+    mock.status = newStatus;
+    mock.rejectionReason = rejectionReason || null;
+    mock.updatedAt = new Date().toISOString();
+    return this.mapMockToAvatar(mock);
+  }
+
   async deleteAvatars(ids: string[]): Promise<void> {
     inMemoryState.avatars = inMemoryState.avatars.filter(a => !ids.includes(a.id));
   }

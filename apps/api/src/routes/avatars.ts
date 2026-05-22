@@ -480,12 +480,11 @@ router.post('/shared/approve/:token', async (req: AuthenticatedRequest, res) => 
       return res.status(404).json({ error: 'アバターが見つかりません。' });
     }
 
-    // Strict One-time consumption: if already approved or rejected, block it
-    if (avatar.status !== 'PENDING') {
-      return res.status(400).json({ error: 'このアバターはすでに処理されています。' });
+    // Atomic check-and-update (TOCTOU protection for shared-link one-time moderation)
+    const updated = await repos.avatars.updateAvatarStatusAtomic(avatar.id, 'PENDING', 'APPROVED');
+    if (!updated) {
+      return res.status(400).json({ error: 'このアバターはすでに処理されているか、無効です。' });
     }
-
-    const updated = await repos.avatars.updateAvatarStatus(avatar.id, 'APPROVED');
 
     // Create approval audit
     const imageHash = crypto.createHash('sha256').update(avatar.objectKey).digest('hex');
@@ -525,12 +524,11 @@ router.post('/shared/reject/:token', async (req: AuthenticatedRequest, res) => {
       return res.status(404).json({ error: 'アバターが見つかりません。' });
     }
 
-    // Strict One-time consumption
-    if (avatar.status !== 'PENDING') {
-      return res.status(400).json({ error: 'このアバターはすでに処理されています。' });
+    // Atomic check-and-update (TOCTOU protection for shared-link one-time moderation)
+    const updated = await repos.avatars.updateAvatarStatusAtomic(avatar.id, 'PENDING', 'REJECTED', reason);
+    if (!updated) {
+      return res.status(400).json({ error: 'このアバターはすでに処理されているか、無効です。' });
     }
-
-    const updated = await repos.avatars.updateAvatarStatus(avatar.id, 'REJECTED', reason);
 
     // Create rejection audit
     const imageHash = crypto.createHash('sha256').update(avatar.objectKey).digest('hex');
