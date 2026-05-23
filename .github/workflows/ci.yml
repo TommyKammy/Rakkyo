@@ -58,6 +58,11 @@ jobs:
             echo "no apps/web tsconfig — skipping"
           fi
 
+      - name: Ensure PyYAML is available for the anti-pattern scan
+        # Used by .github/scripts/check-antipatterns.sh to parse
+        # .completion-gate.yml robustly (handles escaped quotes etc.).
+        run: python3 -m pip install --user --quiet pyyaml
+
       - name: Anti-pattern scan (advisory)
         # Phase 1: report only — does NOT fail the build. Flip to
         # blocking once the existing Rakkyo offenders (Math.random /
