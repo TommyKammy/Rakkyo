@@ -134,6 +134,24 @@ export class InMemoryUserRepository implements UserRepository {
     });
   }
 
+  async findEnrollmentsByClasses(classIds: string[], role: string): Promise<any[]> {
+    if (classIds.length === 0) return [];
+    // Set lookup keeps the per-enrollment check O(1) even for large
+    // teacher class loads. Mirrors the Prisma `classId: { in: ... }`
+    // bulk query.
+    const set = new Set(classIds);
+    const enrollments = inMemoryState.classEnrollments.filter(
+      e => set.has(e.classId) && e.role === role
+    );
+    return enrollments.map(e => {
+      const u = inMemoryState.users.find(user => user.id === e.userId);
+      return {
+        ...e,
+        user: u || null
+      };
+    });
+  }
+
   async createEnrollment(data: {
     id: string;
     classId: string;
