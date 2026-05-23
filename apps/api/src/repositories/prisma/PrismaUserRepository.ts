@@ -99,6 +99,14 @@ export class PrismaUserRepository implements UserRepository {
     });
   }
 
+  async findEnrollmentsByClasses(classIds: string[], role: string): Promise<any[]> {
+    if (classIds.length === 0) return [];
+    return prisma.classEnrollment.findMany({
+      where: { classId: { in: classIds }, role: role as any },
+      include: { user: true }
+    });
+  }
+
   async createEnrollment(data: {
     id: string;
     classId: string;

@@ -160,16 +160,18 @@ router.get('/pending', authMiddleware, async (req: AuthenticatedRequest, res: Re
     let targetStudentIds: string[] = [];
 
     if (user.role === 'TEACHER') {
-      // B2B cram school/school context
+      // B2B cram school/school context. Use the bulk variant so a
+      // teacher with 10 classes pays one DB round-trip instead of 10.
       const enrollments = await repos.users.findEnrollmentsByUser(userId, 'TEACHER');
       const classIds = enrollments.map(e => e.classId);
-      
-      const allStudents: any[] = [];
-      for (const classId of classIds) {
-        const studentEnrollments = await repos.users.findEnrollmentsByClass(classId, 'STUDENT');
-        allStudents.push(...studentEnrollments.map(e => e.user));
-      }
-      targetStudentIds = Array.from(new Set(allStudents.filter(s => s && s.tenantId === user.tenantId).map(s => s.id)));
+
+      const studentEnrollments = await repos.users.findEnrollmentsByClasses(classIds, 'STUDENT');
+      targetStudentIds = Array.from(new Set(
+        studentEnrollments
+          .map(e => e.user)
+          .filter(s => s && s.tenantId === user.tenantId)
+          .map(s => s.id)
+      ));
     } else if (user.role === 'PARENT') {
       // B2C parent context
       const children = await repos.users.findChildrenByParent(userId);
@@ -218,14 +220,14 @@ async function verifyModeratorAuth(repos: any, moderator: any, avatar: any): Pro
     }
     const teacherEnrollments = await repos.users.findEnrollmentsByUser(moderator.id, 'TEACHER');
     const classIds = teacherEnrollments.map((e: any) => e.classId);
-    
-    // Check if the student is in any of the teacher's classes
-    for (const classId of classIds) {
-      const studentEnrollments = await repos.users.findEnrollmentsByClass(classId, 'STUDENT');
-      const isStudentInClass = studentEnrollments.some((e: any) => e.userId === avatar.userId);
-      if (isStudentInClass) return true;
-    }
-    return false;
+    if (classIds.length === 0) return false;
+
+    // Single bulk query instead of one per class. This used to be the
+    // hottest N+1 path in the avatar feature: /active/:userId and
+    // /:id/share both call here on every request, so a teacher with
+    // 10 classes was issuing 10 enrollments queries per page render.
+    const studentEnrollments = await repos.users.findEnrollmentsByClasses(classIds, 'STUDENT');
+    return studentEnrollments.some((e: any) => e.userId === avatar.userId);
   } else if (moderator.role === 'PARENT') {
     const children = await repos.users.findChildrenByParent(moderator.id);
     return children.some((c: any) => c.id === avatar.userId);
