@@ -16,6 +16,10 @@ import { requireSecret } from '../utils/secrets';
 
 const router = Router();
 const AVATAR_SHARE_SECRET = requireSecret('AVATAR_SHARE_SECRET', 'rakkyo-dev-avatar-share-insecure-key-9988');
+// Cron jobs (TTL cleanup) are not user-authenticated; they present this
+// shared secret in the `x-cron-secret` header. Prevents anyone reachable
+// from the internet triggering destructive lifecycle actions.
+const CRON_SECRET = requireSecret('RAKKYO_CRON_SECRET', 'rakkyo-dev-cron-insecure-key-3344');
 
 const generateSchema = z.object({
   baseVegetable: z.enum(Object.keys(VEGETABLE_MAP) as [string, ...string[]]),
@@ -47,23 +51,26 @@ function getNextMonday(d: Date = new Date()): Date {
 
 // 1. POST /api/avatars/generate - Child requests new avatars
 router.post('/generate', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  const uploadedObjectKeys: string[] = [];
   try {
     const userId = req.userId!;
     const repos = req.repos!;
-    
-    // Auth and User check
+
     const user = await repos.users.findById(userId);
     if (!user) {
       return res.status(401).json({ error: 'ユーザーが見つかりません。' });
     }
+    // Avatar generation is a child-only feature. Parents / teachers
+    // must not consume quota or appear in the moderation queue.
+    if (user.role !== 'STUDENT') {
+      return res.status(403).json({ error: 'アバターの作成は児童アカウントのみ可能です。' });
+    }
 
-    // Validate request body
     const parsed = generateSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: '無効なパラメータが含まれています。' });
     }
 
-    // B2C Parent relation guard: if default-b2c tenant, student must have linked parents
     if (user.tenantId === 'default-b2c') {
       const parents = await repos.users.findParentsByChild(userId);
       if (parents.length === 0) {
@@ -71,7 +78,11 @@ router.post('/generate', authMiddleware, async (req: AuthenticatedRequest, res: 
       }
     }
 
-    // Weekly generation limit (Max 3)
+    // Defer quota charge to AFTER the candidate row write succeeds, so
+    // transient AI / storage / DB failures do not consume a user's
+    // weekly attempt. We still claim the weekly slot first (atomic)
+    // so concurrent generations cannot both pass the cap check; on
+    // downstream failure we explicitly rollback the slot.
     const limit = 3;
     const weekBucket = getISOWeekBucket();
     const resetAt = getNextMonday();
@@ -80,15 +91,25 @@ router.post('/generate', authMiddleware, async (req: AuthenticatedRequest, res: 
       return res.status(429).json({ error: '週次生成上限（3回）に達しました。' });
     }
 
-    // Generate 3 candidate images
-    const params = parsed.data as any;
-    const candidateBuffers = await avatarGeneratorService.generateCandidates(params, 3);
-    
-    // Upload files and save records in DB as PENDING
-    const savedAvatars = await Promise.all(
-      candidateBuffers.map(async (buf) => {
-        const objectKey = await storageService.uploadAvatarImage(buf);
-        return repos.avatars.createAvatar({
+    let savedAvatars: Awaited<ReturnType<typeof repos.avatars.createAvatar>>[] = [];
+    try {
+      const params = parsed.data as any;
+      const candidateBuffers = await avatarGeneratorService.generateCandidates(params, 3);
+
+      // Upload first (storage I/O), then atomically write all DB rows.
+      // If any DB insert fails we compensate by deleting every storage
+      // object we have already uploaded for this request, so no orphan
+      // file or partial pending-row set is ever visible to the user.
+      const uploads = await Promise.all(
+        candidateBuffers.map(async (buf) => ({
+          buf,
+          objectKey: await storageService.uploadAvatarImage(buf)
+        }))
+      );
+      uploads.forEach(u => uploadedObjectKeys.push(u.objectKey));
+
+      savedAvatars = await repos.avatars.createAvatarsAtomically(
+        uploads.map(u => ({
           id: crypto.randomUUID(),
           userId,
           status: 'PENDING',
@@ -98,20 +119,25 @@ router.post('/generate', authMiddleware, async (req: AuthenticatedRequest, res: 
           clothing: params.clothing,
           expression: params.expression,
           prompt: avatarGeneratorService.generatePrompt(params),
-          objectKey
-        });
-      })
-    );
+          objectKey: u.objectKey
+        }))
+      );
+    } catch (innerErr) {
+      // Compensate: roll back the storage uploads we made AND the
+      // weekly quota slot we reserved, so the user can retry without
+      // losing one of their three weekly attempts.
+      await Promise.all(uploadedObjectKeys.map(k =>
+        storageService.deleteAvatarImage(k).catch(() => undefined)
+      ));
+      await repos.avatars.releaseQuotaIncrement(userId, weekBucket).catch(() => undefined);
+      throw innerErr;
+    }
 
-    // Generate temporary preview URLs (expires in 5 minutes)
     const candidates = await Promise.all(
-      savedAvatars.map(async (avatar) => {
-        const previewUrl = await storageService.generateSignedUrl(avatar.objectKey, 300);
-        return {
-          id: avatar.id,
-          previewUrl
-        };
-      })
+      savedAvatars.map(async (avatar) => ({
+        id: avatar.id,
+        previewUrl: await storageService.generateSignedUrl(avatar.objectKey, 300)
+      }))
     );
 
     res.status(201).json({ candidates });
@@ -224,29 +250,24 @@ router.post('/:id/approve', authMiddleware, async (req: AuthenticatedRequest, re
       return res.status(404).json({ error: '対象のアバターが見つかりません。' });
     }
 
-    if (avatar.status !== 'PENDING') {
-      return res.status(400).json({ error: 'このアバターはすでに処理されています。' });
-    }
-
-    // Resolve target student to verify tenant & class enrollment
     const student = await repos.users.findById(avatar.userId);
     if (!student) {
       return res.status(404).json({ error: 'アバターの持ち主（生徒）が見つかりません。' });
     }
 
-    const isAuthorized = await verifyModeratorAuth(repos, moderator, {
-      ...avatar,
-      user: student
-    });
-
+    const isAuthorized = await verifyModeratorAuth(repos, moderator, { ...avatar, user: student });
     if (!isAuthorized) {
       return res.status(403).json({ error: 'このアバターを承認する権限がありません。' });
     }
 
-    // Approve avatar
-    const updated = await repos.avatars.updateAvatarStatus(id, 'APPROVED');
+    // Single-statement conditional transition: returns null if the row
+    // is no longer PENDING (another moderator already acted). Same
+    // TOCTOU protection that the shared-link routes already use.
+    const updated = await repos.avatars.updateAvatarStatusAtomic(id, 'PENDING', 'APPROVED');
+    if (!updated) {
+      return res.status(400).json({ error: 'このアバターはすでに処理されています。' });
+    }
 
-    // Create approval audit
     const imageHash = crypto.createHash('sha256').update(avatar.objectKey).digest('hex');
     await repos.avatars.createApprovalAudit({
       avatarId: id,
@@ -285,29 +306,21 @@ router.post('/:id/reject', authMiddleware, async (req: AuthenticatedRequest, res
       return res.status(404).json({ error: '対象のアバターが見つかりません。' });
     }
 
-    if (avatar.status !== 'PENDING') {
-      return res.status(400).json({ error: 'このアバターはすでに処理されています。' });
-    }
-
-    // Resolve target student to verify tenant & class enrollment
     const student = await repos.users.findById(avatar.userId);
     if (!student) {
       return res.status(404).json({ error: 'アバターの持ち主（生徒）が見つかりません。' });
     }
 
-    const isAuthorized = await verifyModeratorAuth(repos, moderator, {
-      ...avatar,
-      user: student
-    });
-
+    const isAuthorized = await verifyModeratorAuth(repos, moderator, { ...avatar, user: student });
     if (!isAuthorized) {
       return res.status(403).json({ error: 'このアバターを却下する権限がありません。' });
     }
 
-    // Reject avatar
-    const updated = await repos.avatars.updateAvatarStatus(id, 'REJECTED', reason);
+    const updated = await repos.avatars.updateAvatarStatusAtomic(id, 'PENDING', 'REJECTED', reason);
+    if (!updated) {
+      return res.status(400).json({ error: 'このアバターはすでに処理されています。' });
+    }
 
-    // Create rejection audit
     const imageHash = crypto.createHash('sha256').update(avatar.objectKey).digest('hex');
     await repos.avatars.createApprovalAudit({
       avatarId: id,
@@ -325,17 +338,46 @@ router.post('/:id/reject', authMiddleware, async (req: AuthenticatedRequest, res
 });
 
 // 5. GET /api/avatars/active/:userId - Child's active avatar (with dynamic signed URL)
+//
+// Authorization: only the avatar's owner, a linked parent, or a teacher
+// in the same tenant/class may read it. The endpoint previously accepted
+// any authenticated `:userId` which let any account enumerate avatars by
+// guessing IDs — a cross-tenant / cross-class privacy leak.
 router.get('/active/:userId', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { userId } = req.params;
+    const { userId: targetUserId } = req.params;
+    const callerId = req.userId!;
     const repos = req.repos!;
 
-    const activeAvatar = await repos.avatars.findLatestApprovedAvatar(userId);
+    const caller = await repos.users.findById(callerId);
+    if (!caller) {
+      return res.status(401).json({ error: 'ユーザーが見つかりません。' });
+    }
+
+    let isAuthorized = callerId === targetUserId;
+    if (!isAuthorized) {
+      const target = await repos.users.findById(targetUserId);
+      if (!target) {
+        // Do not disclose existence of unrelated accounts to the caller.
+        return res.status(404).json({ error: '承認済みのアバターが見つかりません。' });
+      }
+      // Reuse the moderator-authz path: any party allowed to moderate
+      // this user's avatars is by extension allowed to view their
+      // active avatar. This keeps the access policy DRY.
+      isAuthorized = await verifyModeratorAuth(repos, caller, {
+        userId: targetUserId,
+        user: target
+      });
+    }
+    if (!isAuthorized) {
+      return res.status(403).json({ error: 'このアバターを閲覧する権限がありません。' });
+    }
+
+    const activeAvatar = await repos.avatars.findLatestApprovedAvatar(targetUserId);
     if (!activeAvatar) {
       return res.status(404).json({ error: '承認済みのアバターが見つかりません。' });
     }
 
-    // Generate dynamic 5-minute Signed URL
     const avatarUrl = await storageService.generateSignedUrl(activeAvatar.objectKey, 300);
 
     res.json({
@@ -394,20 +436,23 @@ router.get('/:id/share', authMiddleware, async (req: AuthenticatedRequest, res: 
       return res.status(404).json({ error: '対象のアバターが見つかりません。' });
     }
 
-    // Only the student, their parents, or their teachers can generate a share link
+    // Only a linked parent or an authorised teacher in the same
+    // tenant/class can issue a share token. Self-issuance by the
+    // owning student would let the child bypass the moderation queue
+    // by generating a token and self-approving via the token-only
+    // /shared/approve route.
     const user = await repos.users.findById(userId);
     if (!user) {
       return res.status(401).json({ error: 'ユーザーが見つかりません。' });
     }
-
-    let isAuthorized = userId === avatar.userId;
-    if (!isAuthorized) {
-      const student = await repos.users.findById(avatar.userId);
-      if (student) {
-        isAuthorized = await verifyModeratorAuth(repos, user, { ...avatar, user: student });
-      }
+    if (userId === avatar.userId) {
+      return res.status(403).json({ error: '自身のアバターの共有リンクは作成できません。保護者または先生に依頼してください。' });
     }
-
+    const student = await repos.users.findById(avatar.userId);
+    if (!student) {
+      return res.status(404).json({ error: 'アバターの持ち主（生徒）が見つかりません。' });
+    }
+    const isAuthorized = await verifyModeratorAuth(repos, user, { ...avatar, user: student });
     if (!isAuthorized) {
       return res.status(403).json({ error: 'このアバターの共有リンクを作成する権限がありません。' });
     }
@@ -548,16 +593,44 @@ router.post('/shared/reject/:token', async (req: AuthenticatedRequest, res) => {
 });
 
 // 11. POST /api/avatars/cron/cleanup - TTL automatic rejection (30 days) and physical cleanups
+//
+// Authorization: this is NOT a user-authenticated route — it is meant to
+// be invoked by a scheduler (cron / Cloud Scheduler / etc.). We gate it
+// with a shared-secret header (`x-cron-secret`) verified with timing-safe
+// comparison so an internet-reachable attacker cannot trigger mass
+// destructive cleanup. Bypassing user auth without this guard would
+// allow arbitrary tenant-wide deletion.
 router.post('/cron/cleanup', async (req: AuthenticatedRequest, res) => {
   try {
+    const presented = req.header('x-cron-secret') || '';
+    const expectedBuf = Buffer.from(CRON_SECRET, 'utf-8');
+    const presentedBuf = Buffer.from(presented, 'utf-8');
+    if (
+      presentedBuf.length !== expectedBuf.length ||
+      !crypto.timingSafeEqual(expectedBuf, presentedBuf)
+    ) {
+      return res.status(403).json({ error: 'クリーンアップ用シークレットが無効です。' });
+    }
+
     const repos = req.repos!;
     const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
 
-    // Find and auto-reject all pending avatars older than 30 days
+    // Find and auto-reject all pending avatars older than 30 days.
+    // Each transition is guarded by `updateAvatarStatusAtomic` so a
+    // moderator who approved one of these records between the read
+    // and write does NOT have their decision overwritten by the cron.
     const expiredPending = await repos.avatars.findExpiredAvatars(cutoff);
+    const actuallyRejected: typeof expiredPending = [];
     for (const avatar of expiredPending) {
-      await repos.avatars.updateAvatarStatus(avatar.id, 'REJECTED', 'AUTO_REJECT_TTL_EXPIRED');
-      
+      const transitioned = await repos.avatars.updateAvatarStatusAtomic(
+        avatar.id,
+        'PENDING',
+        'REJECTED',
+        'AUTO_REJECT_TTL_EXPIRED'
+      );
+      if (!transitioned) continue; // someone else already moderated this one
+      actuallyRejected.push(avatar);
+
       const imageHash = crypto.createHash('sha256').update(avatar.objectKey).digest('hex');
       await repos.avatars.createApprovalAudit({
         avatarId: avatar.id,
@@ -571,9 +644,11 @@ router.post('/cron/cleanup', async (req: AuthenticatedRequest, res) => {
     // Now find all REJECTED or old unused candidate avatars older than 30 days to physically delete
     const oldRejectedAvatars = await repos.avatars.findOldRejectedAvatars(cutoff);
 
-    // Deduplicate between newly rejected expired pending avatars and already rejected avatars to prevent double-delete calls
+    // Deduplicate between newly rejected expired pending avatars and already rejected avatars to prevent double-delete calls.
+    // Only avatars we ACTUALLY transitioned (not skipped by the
+    // race-guard) should be cleaned up here.
     const uniqueAvatarsMap = new Map<string, typeof expiredPending[0]>();
-    for (const a of expiredPending) {
+    for (const a of actuallyRejected) {
       uniqueAvatarsMap.set(a.id, a);
     }
     for (const a of oldRejectedAvatars) {
@@ -597,7 +672,7 @@ router.post('/cron/cleanup', async (req: AuthenticatedRequest, res) => {
 
     res.json({
       success: true,
-      autoRejectedCount: expiredPending.length,
+      autoRejectedCount: actuallyRejected.length,
       physicallyDeletedCount: allExpiredUnique.length
     });
   } catch (err: any) {

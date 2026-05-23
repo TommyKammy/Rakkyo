@@ -22,9 +22,15 @@ const registerSchema = z.object({
   role: z.enum(['STUDENT', 'TEACHER', 'PARENT']).optional().default('STUDENT')
 });
 
+// NOTE: do NOT add `.max()` to password here. Registration accepts any
+// password length above 6 chars, so capping login at 100 chars would
+// permanently lock out anyone whose stored bcrypt hash was generated
+// from a longer password — an authentication regression. bcrypt
+// itself silently truncates at 72 chars internally; the Zod schema
+// must not pre-empt that with its own rejection.
 const loginSchema = z.object({
   email: z.string().email(),
-  password: z.string().max(100),
+  password: z.string(),
   tenantCode: z.string().max(50).optional()
 });
 

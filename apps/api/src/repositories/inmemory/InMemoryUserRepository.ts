@@ -156,9 +156,21 @@ export class InMemoryUserRepository implements UserRepository {
     inMemoryState.bossBattleParticipants = inMemoryState.bossBattleParticipants.filter(p => p.userId !== userId);
     inMemoryState.bossApprovalAudits = inMemoryState.bossApprovalAudits.filter(a => a.userId !== userId);
     
-    // Phase 16-B: Symmetrical cascade deletes
+    // Phase 16-B: Symmetrical cascade deletes that mirror Prisma's
+    // schema-level relations.
+    //
+    // 1. Avatar → AvatarApprovalAudit is now `onDelete: SetNull` so that
+    //    the audit trail survives avatar deletion (see schema.prisma).
+    //    Apply the same SetNull to audits referencing user-owned avatars.
+    inMemoryState.avatarApprovalAudits.forEach(a => {
+      if (a.avatarId && avatarIds.includes(a.avatarId)) {
+        a.avatarId = null;
+      }
+    });
+    // 2. Audits where this user was the moderator carry the user's PII
+    //    in moderatorId, so RTBF still requires removing those rows.
     inMemoryState.avatarApprovalAudits = inMemoryState.avatarApprovalAudits.filter(
-      a => !avatarIds.includes(a.avatarId) && a.moderatorId !== userId
+      a => a.moderatorId !== userId
     );
     inMemoryState.avatarQuotas = inMemoryState.avatarQuotas.filter(q => q.userId !== userId);
     inMemoryState.avatars = inMemoryState.avatars.filter(a => a.userId !== userId);

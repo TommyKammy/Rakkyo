@@ -35,9 +35,14 @@ export class InMemoryAvatarRepository implements AvatarRepository {
   }
 
   private mapMockToAudit(mock: AvatarApprovalAuditMock): AvatarApprovalAudit {
+    // `avatarId` is nullable in the schema (onDelete: SetNull) but the
+    // generated Prisma client type still types it as non-null until
+    // `prisma generate` is rerun against the updated schema. Cast to
+    // satisfy the existing client signature; at runtime null flows
+    // through correctly.
     return {
       id: mock.id,
-      avatarId: mock.avatarId,
+      avatarId: mock.avatarId as unknown as string,
       moderatorId: mock.moderatorId,
       action: mock.action,
       imageHash: mock.imageHash,
@@ -88,6 +93,32 @@ export class InMemoryAvatarRepository implements AvatarRepository {
     return this.mapMockToAvatar(mock);
   }
 
+  async createAvatarsAtomically(items: Array<{
+    id: string;
+    userId: string;
+    status: string;
+    baseVegetable: string;
+    mainColor: string;
+    facialFeatures: string;
+    clothing: string;
+    expression: string;
+    prompt: string;
+    objectKey: string;
+  }>): Promise<Avatar[]> {
+    // Stage in a local array first so any item-level failure can roll
+    // back without touching the shared singleton. Node single-thread +
+    // no await between stage & commit makes this race-free.
+    const nowStr = new Date().toISOString();
+    const staged: AvatarMock[] = items.map(data => ({
+      ...data,
+      rejectionReason: null,
+      createdAt: nowStr,
+      updatedAt: nowStr
+    }));
+    inMemoryState.avatars.push(...staged);
+    return staged.map(m => this.mapMockToAvatar(m));
+  }
+
   async updateAvatarStatus(id: string, status: string, rejectionReason?: string | null): Promise<Avatar> {
     const mock = inMemoryState.avatars.find(a => a.id === id);
     if (!mock) throw new Error('Avatar not found');
@@ -111,6 +142,15 @@ export class InMemoryAvatarRepository implements AvatarRepository {
   }
 
   async deleteAvatars(ids: string[]): Promise<void> {
+    // Mirror the Prisma onDelete: SetNull behaviour on AvatarApprovalAudit.
+    // Audits for the deleted avatars survive with avatarId set to null
+    // so the compliance trail is preserved across cron-cleanup runs.
+    const idSet = new Set(ids);
+    inMemoryState.avatarApprovalAudits.forEach(a => {
+      if (a.avatarId && idSet.has(a.avatarId)) {
+        a.avatarId = null;
+      }
+    });
     inMemoryState.avatars = inMemoryState.avatars.filter(a => !ids.includes(a.id));
   }
 
@@ -160,6 +200,16 @@ export class InMemoryAvatarRepository implements AvatarRepository {
       };
       inMemoryState.avatarQuotas.push(mock);
       return { success: true, newCount: mock.count };
+    }
+  }
+
+  async releaseQuotaIncrement(userId: string, weekBucket: string): Promise<void> {
+    const quota = inMemoryState.avatarQuotas.find(
+      q => q.userId === userId && q.weekBucket === weekBucket
+    );
+    if (quota && quota.count > 0) {
+      quota.count -= 1;
+      quota.updatedAt = new Date().toISOString();
     }
   }
 

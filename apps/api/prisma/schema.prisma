@@ -432,8 +432,14 @@ model AvatarGenerationQuota {
 
 model AvatarApprovalAudit {
   id            String   @id @default(uuid())
-  avatarId      String
-  avatar        Avatar   @relation(fields: [avatarId], references: [id], onDelete: Cascade)
+  // Nullable + onDelete: SetNull lets the audit trail survive avatar deletion.
+  // The cron-cleanup flow records an audit and then deletes the avatar;
+  // if this cascaded the audit would be erased in the same request,
+  // defeating the audit purpose. With SetNull the audit stays,
+  // avatarId becomes null, but moderator action / hash / reason remain
+  // queryable for compliance review.
+  avatarId      String?
+  avatar        Avatar?  @relation(fields: [avatarId], references: [id], onDelete: SetNull)
   moderatorId   String   // Teacher or Parent User ID
   action        String   // "APPROVE" | "REJECT"
   imageHash     String   // Integrational verification hash

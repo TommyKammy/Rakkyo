@@ -209,7 +209,10 @@ export interface AvatarGenerationQuotaMock {
 
 export interface AvatarApprovalAuditMock {
   id: string;
-  avatarId: string;
+  // Nullable to mirror Prisma schema: when the underlying Avatar is
+  // deleted (e.g. by cron-cleanup) the audit row survives with
+  // avatarId set to null, preserving the compliance trail.
+  avatarId: string | null;
   moderatorId: string;
   action: string;
   imageHash: string;

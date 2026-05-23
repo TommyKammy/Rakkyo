@@ -399,11 +399,15 @@ describe('AI Avatar Maker Integration Tests (Phase 16-B)', () => {
       
       avatarId = resGen.body.candidates[0].id;
 
-      // 2. Generate a sharing link
+      // 2. Generate a sharing link. Phase 16-B authz update: the student
+      // CANNOT self-issue a share token (that would let them bypass the
+      // moderation queue by self-approving via the token-only route).
+      // The linked parent issues the token instead — that is the
+      // production flow this feature is intended for anyway.
       const resShare = await request(app)
         .get(`/api/avatars/${avatarId}/share`)
-        .set('Authorization', `Bearer ${studentB2CWithParentToken}`);
-      
+        .set('Authorization', `Bearer ${parentB2CToken}`);
+
       shareToken = resShare.body.token;
       shareUrl = resShare.body.shareUrl;
     });
@@ -689,7 +693,13 @@ describe('AI Avatar Maker Integration Tests (Phase 16-B)', () => {
     });
 
     it('should auto-reject old pending, physically delete rejected assets older than 30 days, and preserve approved/fresh files', async () => {
-      const res = await request(app).post('/api/avatars/cron/cleanup');
+      // Phase 16-B authz: /cron/cleanup is now gated by a shared
+      // secret (`x-cron-secret`). Tests must send it; production
+      // schedulers carry it as an environment-provided header.
+      const cronSecret = process.env.RAKKYO_CRON_SECRET || 'rakkyo-dev-cron-insecure-key-3344';
+      const res = await request(app)
+        .post('/api/avatars/cron/cleanup')
+        .set('x-cron-secret', cronSecret);
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.autoRejectedCount).toBe(1);
@@ -723,13 +733,17 @@ describe('AI Avatar Maker Integration Tests (Phase 16-B)', () => {
       expect(oldRejected).toBeUndefined(); // deleted from DB
       expect(storageService.hasObject(oldRejectedKey)).toBe(false); // physically deleted from S3/storage
 
-      // Verify that auto-rejection audit logs were written
+      // Verify that auto-rejection audit logs survive avatar deletion.
+      // Phase 16-B audit-retention update: AvatarApprovalAudit → Avatar
+      // is now ON DELETE SET NULL, so the cron flow records an audit
+      // and then deletes the avatar in the same request — the audit
+      // row remains with avatarId=null for the compliance trail.
       const audits = inMemoryState.avatarApprovalAudits.filter(
-        a => a.avatarId === oldPendingId && a.moderatorId === 'cron-ttl-cleanup'
+        a => a.moderatorId === 'cron-ttl-cleanup' && a.reason === 'AUTO_REJECT_TTL_EXPIRED'
       );
       expect(audits).toHaveLength(1);
       expect(audits[0].action).toBe('REJECT');
-      expect(audits[0].reason).toBe('AUTO_REJECT_TTL_EXPIRED');
+      expect(audits[0].avatarId).toBeNull();
     });
   });
 });
