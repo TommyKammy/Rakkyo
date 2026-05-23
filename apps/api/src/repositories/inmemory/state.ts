@@ -326,10 +326,15 @@ class InMemoryState {
     const userId = 'test-student-id';
     const now = new Date();
     
-    // Helper to get relative date
+    // Helper to get relative date.
+    // `hour` is interpreted as a JST hour-of-day so the resulting Date
+    // lands on the desired JST bucket regardless of the runner's
+    // timezone. parentStatsService consumes these via getJstDateString
+    // (UTC+9), so anchoring to JST keeps tests deterministic on both
+    // local (JST) and CI (UTC) hosts.
     const getPastDate = (daysAgo: number, hour: number) => {
       const d = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
-      d.setHours(hour, 0, 0, 0);
+      d.setUTCHours(hour - 9, 0, 0, 0);
       return d.toISOString();
     };
 
