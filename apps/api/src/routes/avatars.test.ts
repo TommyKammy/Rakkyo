@@ -693,6 +693,7 @@ describe('AI Avatar Maker Integration Tests (Phase 16-B)', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.autoRejectedCount).toBe(1);
+      expect(res.body.physicallyDeletedCount).toBe(2);
       
       // Let's verify what records remain in DB
       const remainingAvatars = inMemoryState.avatars;

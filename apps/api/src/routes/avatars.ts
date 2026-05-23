@@ -571,9 +571,17 @@ router.post('/cron/cleanup', async (req: AuthenticatedRequest, res) => {
     // Now find all REJECTED or old unused candidate avatars older than 30 days to physically delete
     const oldRejectedAvatars = await repos.avatars.findOldRejectedAvatars(cutoff);
 
-    const allExpired = [...expiredPending, ...oldRejectedAvatars];
-    const objectKeysToDelete = allExpired.map(a => a.objectKey);
-    const avatarIdsToDelete = allExpired.map(a => a.id);
+    // Deduplicate between newly rejected expired pending avatars and already rejected avatars to prevent double-delete calls
+    const uniqueAvatarsMap = new Map<string, typeof expiredPending[0]>();
+    for (const a of expiredPending) {
+      uniqueAvatarsMap.set(a.id, a);
+    }
+    for (const a of oldRejectedAvatars) {
+      uniqueAvatarsMap.set(a.id, a);
+    }
+    const allExpiredUnique = Array.from(uniqueAvatarsMap.values());
+    const objectKeysToDelete = allExpiredUnique.map(a => a.objectKey);
+    const avatarIdsToDelete = allExpiredUnique.map(a => a.id);
 
     // Physically delete from StorageService
     await Promise.all(
@@ -590,7 +598,7 @@ router.post('/cron/cleanup', async (req: AuthenticatedRequest, res) => {
     res.json({
       success: true,
       autoRejectedCount: expiredPending.length,
-      physicallyDeletedCount: allExpired.length
+      physicallyDeletedCount: allExpiredUnique.length
     });
   } catch (err: any) {
     console.error('Error during automatic TTL cleanup:', err);
