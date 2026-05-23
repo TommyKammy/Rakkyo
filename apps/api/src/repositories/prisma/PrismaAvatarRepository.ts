@@ -83,6 +83,15 @@ export class PrismaAvatarRepository implements AvatarRepository {
     });
   }
 
+  async findOldRejectedAvatars(cutoff: Date): Promise<Avatar[]> {
+    return prisma.avatar.findMany({
+      where: {
+        status: 'REJECTED',
+        createdAt: { lt: cutoff }
+      }
+    });
+  }
+
   async atomicIncrementQuota(userId: string, weekBucket: string, limit: number, resetAt: Date): Promise<{
     success: boolean;
     newCount: number;

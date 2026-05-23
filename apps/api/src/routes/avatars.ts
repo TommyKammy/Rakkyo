@@ -569,22 +569,7 @@ router.post('/cron/cleanup', async (req: AuthenticatedRequest, res) => {
     }
 
     // Now find all REJECTED or old unused candidate avatars older than 30 days to physically delete
-    let oldRejectedAvatars: any[] = [];
-    if (repos.constructor.name === 'PrismaAvatarRepository') {
-      const db = (await import('../db')).default;
-      oldRejectedAvatars = await db.avatar.findMany({
-        where: {
-          status: 'REJECTED',
-          createdAt: { lt: cutoff }
-        }
-      });
-    } else {
-      const { inMemoryState } = await import('../repositories/inmemory/state');
-      const cutoffMs = cutoff.getTime();
-      oldRejectedAvatars = inMemoryState.avatars.filter(
-        a => a.status === 'REJECTED' && new Date(a.createdAt).getTime() < cutoffMs
-      );
-    }
+    const oldRejectedAvatars = await repos.avatars.findOldRejectedAvatars(cutoff);
 
     const allExpired = [...expiredPending, ...oldRejectedAvatars];
     const objectKeysToDelete = allExpired.map(a => a.objectKey);

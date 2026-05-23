@@ -122,6 +122,14 @@ export class InMemoryAvatarRepository implements AvatarRepository {
     return list.map(a => this.mapMockToAvatar(a));
   }
 
+  async findOldRejectedAvatars(cutoff: Date): Promise<Avatar[]> {
+    const cutoffMs = cutoff.getTime();
+    const list = inMemoryState.avatars.filter(
+      a => a.status === 'REJECTED' && new Date(a.createdAt).getTime() < cutoffMs
+    );
+    return list.map(a => this.mapMockToAvatar(a));
+  }
+
   async atomicIncrementQuota(userId: string, weekBucket: string, limit: number, resetAt: Date): Promise<{
     success: boolean;
     newCount: number;

@@ -20,6 +20,7 @@ export interface AvatarRepository {
   updateAvatarStatusAtomic(id: string, expectedStatus: string, newStatus: string, rejectionReason?: string | null): Promise<Avatar | null>;
   deleteAvatars(ids: string[]): Promise<void>;
   findExpiredAvatars(cutoff: Date): Promise<Avatar[]>;
+  findOldRejectedAvatars(cutoff: Date): Promise<Avatar[]>;
   
   // Atomic updates with serializable isolation protection (TOCTOU protection)
   atomicIncrementQuota(userId: string, weekBucket: string, limit: number, resetAt: Date): Promise<{
