@@ -25,11 +25,18 @@ describe('Parent Router /api/parent', () => {
     token = res.body.token;
     userId = res.body.user.id;
 
-    // Seed mock attempts specifically for this test user in mockDb
+    // Seed mock attempts specifically for this test user in mockDb.
+    //
+    // `hour` is interpreted as a JST hour-of-day. We use setUTCHours so the
+    // resulting date's JST bucket (computed by parentStatsService.getJstDateString)
+    // is deterministic across CI/runner timezones. The pre-existing
+    // `d.setHours(hour, ...)` used the runner's local timezone, which on
+    // CI ubuntu (TZ=UTC) pushed "today, JST 15:00" into JST tomorrow and
+    // dropped it from this week's bucket.
     const now = new Date();
     const getPastDate = (daysAgo: number, hour: number) => {
       const d = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
-      d.setHours(hour, 0, 0, 0);
+      d.setUTCHours(hour - 9, 0, 0, 0);
       return d.toISOString();
     };
 
