@@ -45,7 +45,7 @@ export class InMemoryCollaborativeRepository implements CollaborativeRepository 
   }): Promise<any> {
     const newStamp = {
       ...data,
-      id: 'stamp_' + Math.random().toString(36).substr(2, 9),
+      id: 'stamp_' + crypto.randomUUID(),
       createdAt: new Date().toISOString()
     };
     inMemoryState.peerStamps.push(newStamp);
@@ -95,7 +95,7 @@ export class InMemoryCollaborativeRepository implements CollaborativeRepository 
   }): Promise<any> {
     const newTip = {
       ...data,
-      id: 'tip_' + Math.random().toString(36).substr(2, 9),
+      id: 'tip_' + crypto.randomUUID(),
       createdAt: new Date().toISOString()
     };
     inMemoryState.hiramekiTips.push(newTip);
@@ -111,7 +111,7 @@ export class InMemoryCollaborativeRepository implements CollaborativeRepository 
   }): Promise<any> {
     const celebration = {
       ...data,
-      id: 'celeb_' + Math.random().toString(36).substr(2, 9),
+      id: 'celeb_' + crypto.randomUUID(),
       expiresAt: data.expiresAt.toISOString(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -176,7 +176,7 @@ export class InMemoryCollaborativeRepository implements CollaborativeRepository 
 
   async createParentMessage(userId: string, message: string): Promise<any> {
     const newMessage = {
-      id: 'msg_' + Math.random().toString(36).substr(2, 9),
+      id: 'msg_' + crypto.randomUUID(),
       userId,
       message,
       isRead: false,
@@ -207,7 +207,7 @@ export class InMemoryCollaborativeRepository implements CollaborativeRepository 
   }): Promise<any> {
     const newAssignment = {
       ...data,
-      id: 'assignment_' + Math.random().toString(36).substr(2, 9),
+      id: 'assignment_' + crypto.randomUUID(),
       dueDate: data.dueDate.toISOString(),
       createdAt: new Date().toISOString()
     };
@@ -229,7 +229,7 @@ export class InMemoryCollaborativeRepository implements CollaborativeRepository 
     progresses.forEach(p => {
       inMemoryState.assignmentProgresses.push({
         ...p,
-        id: 'progress_' + Math.random().toString(36).substr(2, 9),
+        id: 'progress_' + crypto.randomUUID(),
         completedAt: null
       });
     });
@@ -246,7 +246,7 @@ export class InMemoryCollaborativeRepository implements CollaborativeRepository 
   }): Promise<any> {
     const alert = {
       ...data,
-      id: 'alert_' + Math.random().toString(36).slice(2, 11),
+      id: 'alert_' + crypto.randomUUID(),
       status: 'QUEUED' as const,
       createdAt: new Date().toISOString(),
       sentAt: null

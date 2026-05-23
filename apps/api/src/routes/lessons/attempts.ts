@@ -7,8 +7,8 @@ import { AiTutorProviderFactory } from '@rakkyo/ai-tutor';
 const router = Router();
 
 const submitSchema = z.object({
-  questionId: z.string(),
-  answerSubmitted: z.string(),
+  questionId: z.string().max(100),
+  answerSubmitted: z.string().max(5000),
   hintsUsed: z.number().int().nonnegative(),
   isCorrect: z.boolean().optional(), // Fallback from client if verification fails
   durationSeconds: z.number().int().nonnegative().optional().nullable(),

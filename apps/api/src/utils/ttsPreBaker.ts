@@ -20,13 +20,13 @@ export async function preBakeTTS(): Promise<void> {
 
     const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     if (!apiKey) {
-      console.log('ℹ️ No TTS API Key found. Writing mock pre-baked metadata only.');
+      console.info('ℹ️ No TTS API Key found. Writing mock pre-baked metadata only.');
       // Create empty mock or metadata placeholder just to indicate prebake ran
       fs.writeFileSync(path.join(CACHE_DIR, '.prebaked'), JSON.stringify({ prebakedAt: new Date().toISOString() }));
       return;
     }
 
-    console.log(`🎙️ Pre-baking ${PRE_BAKED_PHRASES.length} critical TTS phrases...`);
+    console.info(`🎙️ Pre-baking ${PRE_BAKED_PHRASES.length} critical TTS phrases...`);
 
     for (const phrase of PRE_BAKED_PHRASES) {
       const cleanText = phrase.text.replace(/<[^>]*>/g, '').trim();
@@ -74,14 +74,14 @@ export async function preBakeTTS(): Promise<void> {
         if (data.audioContent) {
           const audioBuffer = Buffer.from(data.audioContent, 'base64');
           fs.writeFileSync(filePath, audioBuffer);
-          console.log(`✓ Pre-baked TTS: "${phrase.text.substring(0, 10)}..." -> ${fileName}`);
+          console.info(`✓ Pre-baked TTS: "${phrase.text.substring(0, 10)}..." -> ${fileName}`);
         }
       } else {
         console.warn(`⚠️ Failed to pre-bake: "${phrase.text.substring(0, 10)}..."`, await response.text());
       }
     }
 
-    console.log('🎙️ TTS Pre-baking complete.');
+    console.info('🎙️ TTS Pre-baking complete.');
   } catch (error) {
     console.error('❌ Error pre-baking TTS phrases:', error);
   }

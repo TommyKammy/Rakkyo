@@ -64,7 +64,7 @@ function evictCacheIfNeeded() {
         if (totalSize <= limit) break;
         fs.unlinkSync(file.path);
         totalSize -= file.size;
-        console.log(`[TTS Cache Eviction] Removed old cache file: ${file.name}`);
+        console.info(`[TTS Cache Eviction] Removed old cache file: ${file.name}`);
       }
     }
   } catch (err) {

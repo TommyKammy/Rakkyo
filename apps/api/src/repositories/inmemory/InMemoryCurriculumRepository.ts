@@ -1,6 +1,7 @@
 import { CurriculumRepository } from '../CurriculumRepository';
 import { inMemoryState } from './state';
 import { allCurriculums } from '@rakkyo/curriculum';
+import crypto from 'crypto';
 
 export class InMemoryCurriculumRepository implements CurriculumRepository {
   async findQuestionById(id: string): Promise<any | null> {
@@ -72,7 +73,7 @@ export class InMemoryCurriculumRepository implements CurriculumRepository {
     );
     studentEnrollments.forEach(s => {
       inMemoryState.assignmentProgresses.push({
-        id: 'progress_' + Math.random().toString(36).substr(2, 9),
+        id: 'progress_' + crypto.randomUUID(),
         assignmentId: newAssignment.id,
         studentId: s.userId,
         isCompleted: false,
@@ -106,7 +107,7 @@ export class InMemoryCurriculumRepository implements CurriculumRepository {
   async createDynamicQuestion(data: any): Promise<any> {
     const newQ = {
       ...data,
-      id: 'q_dynamic_' + Math.random().toString(36).substr(2, 9),
+      id: 'q_dynamic_' + crypto.randomUUID(),
       isDynamic: true
     };
     inMemoryState.dynamicQuestions.push(newQ);

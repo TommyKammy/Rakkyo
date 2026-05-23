@@ -1,8 +1,9 @@
 import request from 'supertest';
 import app from '../app';
+import crypto from 'crypto';
 
 describe('Auth Router /api/auth', () => {
-  const testEmail = `student_${Math.random().toString(36).substr(2, 9)}@rakkyo.com`;
+  const testEmail = `student_${crypto.randomUUID()}@rakkyo.com`;
   const testPassword = 'password123';
   const testNickname = 'わかばちゃん';
 

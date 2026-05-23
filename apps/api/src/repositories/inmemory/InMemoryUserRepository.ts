@@ -1,6 +1,9 @@
 import { UserRepository } from '../UserRepository';
 import { User, Tenant, ClassEnrollment } from '@prisma/client';
 import { inMemoryState } from './state';
+import { storageService } from '../../services/StorageService';
+import crypto from 'crypto';
+
 
 export class InMemoryUserRepository implements UserRepository {
   async findById(id: string): Promise<User | null> {
@@ -145,8 +148,33 @@ export class InMemoryUserRepository implements UserRepository {
     // GDPR-K compliant cascade — must mirror PrismaUserRepository.deleteUserData
     // including any newly-added user-linked tables. When adding a new table
     // that holds a userId, ALSO add a filter here.
+    const userAvatars = inMemoryState.avatars.filter(a => a.userId === userId);
+    const avatarIds = userAvatars.map(a => a.id);
+    const objectKeys = userAvatars.map(a => a.objectKey);
+
+    // Delete in-memory DB records
     inMemoryState.bossBattleParticipants = inMemoryState.bossBattleParticipants.filter(p => p.userId !== userId);
     inMemoryState.bossApprovalAudits = inMemoryState.bossApprovalAudits.filter(a => a.userId !== userId);
+    
+    // Phase 16-B: Symmetrical cascade deletes that mirror Prisma's
+    // schema-level relations.
+    //
+    // 1. Avatar → AvatarApprovalAudit is now `onDelete: SetNull` so that
+    //    the audit trail survives avatar deletion (see schema.prisma).
+    //    Apply the same SetNull to audits referencing user-owned avatars.
+    inMemoryState.avatarApprovalAudits.forEach(a => {
+      if (a.avatarId && avatarIds.includes(a.avatarId)) {
+        a.avatarId = null;
+      }
+    });
+    // 2. Audits where this user was the moderator carry the user's PII
+    //    in moderatorId, so RTBF still requires removing those rows.
+    inMemoryState.avatarApprovalAudits = inMemoryState.avatarApprovalAudits.filter(
+      a => a.moderatorId !== userId
+    );
+    inMemoryState.avatarQuotas = inMemoryState.avatarQuotas.filter(q => q.userId !== userId);
+    inMemoryState.avatars = inMemoryState.avatars.filter(a => a.userId !== userId);
+
     inMemoryState.parentalCelebrations = inMemoryState.parentalCelebrations.filter(c => c.childId !== userId);
     inMemoryState.attempts = inMemoryState.attempts.filter(a => a.userId !== userId);
     inMemoryState.parentMessages = inMemoryState.parentMessages.filter(m => m.userId !== userId);
@@ -155,7 +183,17 @@ export class InMemoryUserRepository implements UserRepository {
     inMemoryState.classEnrollments = inMemoryState.classEnrollments.filter(e => e.userId !== userId);
     inMemoryState.assignmentProgresses = inMemoryState.assignmentProgresses.filter(p => p.studentId !== userId);
     inMemoryState.safetyAlerts = inMemoryState.safetyAlerts.filter(a => a.childUserId !== userId);
+    inMemoryState.parentChildRelations = inMemoryState.parentChildRelations.filter(
+      r => r.parentId !== userId && r.childId !== userId
+    );
     inMemoryState.users = inMemoryState.users.filter(u => u.id !== userId);
+
+    // Physically delete from StorageService
+    await Promise.all(
+      objectKeys.map(key => storageService.deleteAvatarImage(key).catch(err => {
+        console.error(`Failed to delete in-memory storage file ${key}:`, err);
+      }))
+    );
   }
 
   async atomicAbuseStrike(userId: string, opts: {
@@ -215,7 +253,7 @@ export class InMemoryUserRepository implements UserRepository {
 
   async createParentMessage(userId: string, message: string): Promise<any> {
     const newMessage = {
-      id: 'msg_' + Math.random().toString(36).substr(2, 9),
+      id: 'msg_' + crypto.randomUUID(),
       userId,
       message,
       isRead: false,
@@ -232,5 +270,33 @@ export class InMemoryUserRepository implements UserRepository {
       return true;
     }
     return false;
+  }
+
+  async findChildrenByParent(parentId: string): Promise<User[]> {
+    const relations = inMemoryState.parentChildRelations.filter(r => r.parentId === parentId);
+    const childIds = relations.map(r => r.childId);
+    const children = inMemoryState.users.filter(u => childIds.includes(u.id));
+    return children.map(u => ({ ...u, password: u.passwordHash } as any as User));
+  }
+
+  async findParentsByChild(childId: string): Promise<User[]> {
+    const relations = inMemoryState.parentChildRelations.filter(r => r.childId === childId);
+    const parentIds = relations.map(r => r.parentId);
+    const parents = inMemoryState.users.filter(u => parentIds.includes(u.id));
+    return parents.map(u => ({ ...u, password: u.passwordHash } as any as User));
+  }
+
+  async createParentChildRelation(parentId: string, childId: string): Promise<any> {
+    const exists = inMemoryState.parentChildRelations.some(r => r.parentId === parentId && r.childId === childId);
+    if (exists) return { parentId, childId };
+    
+    const newRelation = {
+      id: `pcr_${crypto.randomUUID()}`,
+      parentId,
+      childId,
+      createdAt: new Date().toISOString()
+    };
+    inMemoryState.parentChildRelations.push(newRelation);
+    return newRelation;
   }
 }

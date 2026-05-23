@@ -1,14 +1,15 @@
 import request from 'supertest';
 import app from '../app';
+import crypto from 'crypto';
 
 describe('Lessons Router /api/lessons', () => {
-  const testEmail = `student_${Math.random().toString(36).substr(2, 9)}@rakkyo.com`;
+  const testEmail = `student_${crypto.randomUUID()}@rakkyo.com`;
   const testPassword = 'password123';
   const testNickname = 'テストくん';
   let token = '';
 
   const createTestUserToken = async (suffix: string) => {
-    const email = `student_${suffix}_${Math.random().toString(36).substr(2, 9)}@rakkyo.com`;
+    const email = `student_${suffix}_${crypto.randomUUID()}@rakkyo.com`;
     const regRes = await request(app)
       .post('/api/auth/register')
       .send({

@@ -36,6 +36,9 @@ export interface UserRepository {
   findParentMessages(userId: string): Promise<any[]>;
   createParentMessage(userId: string, message: string): Promise<any>;
   markParentMessageAsRead(id: string): Promise<boolean>;
+  findChildrenByParent(parentId: string): Promise<User[]>;
+  findParentsByChild(childId: string): Promise<User[]>;
+  createParentChildRelation(parentId: string, childId: string): Promise<any>;
 
   /**
    * Atomically apply one abuse strike to a user.

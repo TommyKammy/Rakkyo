@@ -1,13 +1,14 @@
 import request from 'supertest';
 import app from '../app';
 import { inMemoryState } from '../repositories/inmemory/state';
+import crypto from 'crypto';
 
 describe('Gamification Integration Tests', () => {
   const testPassword = 'password123';
   const testNickname = 'ゲームくん';
 
   const createTestUserToken = async (suffix: string) => {
-    const email = `gamer_${suffix}_${Math.random().toString(36).substr(2, 9)}@rakkyo.com`;
+    const email = `gamer_${suffix}_${crypto.randomUUID()}@rakkyo.com`;
     const regRes = await request(app)
       .post('/api/auth/register')
       .send({
