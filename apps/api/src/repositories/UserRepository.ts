@@ -26,6 +26,14 @@ export interface UserRepository {
   findEnrollment(userId: string, role: string): Promise<(ClassEnrollment & { class: any }) | null>;
   findEnrollmentsByUser(userId: string, role: string): Promise<any[]>;
   findEnrollmentsByClass(classId: string, role: string): Promise<any[]>;
+  /**
+   * Bulk variant of `findEnrollmentsByClass` that returns enrollments
+   * (with their joined user) for any of the supplied class ids in a
+   * single round-trip. Use this when iterating over a teacher's class
+   * list — otherwise the per-class loop produces N×M database calls
+   * that scale linearly with class count.
+   */
+  findEnrollmentsByClasses(classIds: string[], role: string): Promise<any[]>;
   createEnrollment(data: {
     id: string;
     classId: string;
