@@ -29,7 +29,29 @@ export class SpeechAnalysisService {
       throw new Error(`Speech audio file not found at ${filePath}`);
     }
 
-    // 2. Perform STT v2 simulation (mock speech analysis aligned to test expectations)
+    // 2. Read and analyze the raw WAV PCM audio binary (P1 Badge)
+    const audioData = fs.readFileSync(filePath);
+    
+    let isSilent = true;
+    let totalAmplitude = 0;
+    let sampleCount = 0;
+
+    // Standard PCM WAV audio samples start after the header (offset 44)
+    for (let i = 44; i < audioData.length - 1; i += 2) {
+      const sample = audioData.readInt16LE(i);
+      totalAmplitude += Math.abs(sample);
+      sampleCount++;
+      if (sample !== 0) {
+        isSilent = false;
+      }
+    }
+
+    const averageAmplitude = sampleCount > 0 ? totalAmplitude / sampleCount : 0;
+    
+    // Voice detected threshold: average amplitude must be > 5 out of 32768
+    const voiceDetected = !isSilent && averageAmplitude > 5;
+
+    // 3. Perform STT v2 simulation (mock speech analysis aligned to test expectations)
     // We parse the expectedText and map it into phonetic buckets.
     const words = expectedText.trim().split(/\s+/);
     const analyzedWords: WordAnalysisResult[] = [];
@@ -39,7 +61,13 @@ export class SpeechAnalysisService {
       const cleanWord = w.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "");
       if (!cleanWord) continue;
 
-      const phonemes = this.mapWordToPhonemes(cleanWord, languageCode);
+      let phonemes = this.mapWordToPhonemes(cleanWord, languageCode);
+
+      // If no spoken voice signal was found (pure silence), downgrade all phoneme levels to 'unclear'
+      if (!voiceDetected) {
+        phonemes = phonemes.map(p => ({ ...p, level: 'unclear' }));
+      }
+
       analyzedWords.push({
         word: cleanWord,
         phonemes

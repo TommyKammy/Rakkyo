@@ -55,6 +55,32 @@ function getWavDuration(buffer: Buffer): number {
     throw new Error('WAVファイル構造が不正です（バイトレートが0です）。');
   }
 
+  // Validate WAV header consistency (P2 Badge consistency verification)
+  const numChannels = buffer.readUInt16LE(fmtOffset + 10);
+  const sampleRate = buffer.readUInt32LE(fmtOffset + 12);
+  const blockAlign = buffer.readUInt16LE(fmtOffset + 20);
+  const bitsPerSample = buffer.readUInt16LE(fmtOffset + 22);
+
+  if (numChannels === 0) {
+    throw new Error('WAVファイル構造が不正です（チャンネル数が0です）。');
+  }
+  if (sampleRate === 0) {
+    throw new Error('WAVファイル構造が不正です（サンプルレートが0です）。');
+  }
+  if (bitsPerSample === 0) {
+    throw new Error('WAVファイル構造が不正です（ビット深度が0です）。');
+  }
+
+  const expectedByteRate = (sampleRate * numChannels * bitsPerSample) / 8;
+  if (byteRate !== expectedByteRate) {
+    throw new Error('WAVファイル構造が不正です（バイトレートとパラメータの不一致）。');
+  }
+
+  const expectedBlockAlign = (numChannels * bitsPerSample) / 8;
+  if (blockAlign !== expectedBlockAlign) {
+    throw new Error('WAVファイル構造が不正です（ブロックアラインとパラメータの不一致）。');
+  }
+
   // Require an actual data chunk in WAV validation
   if (dataSize === -1) {
     throw new Error('WAVファイル構造が不正です（data チャンクが見つかりません）。');

@@ -28,7 +28,12 @@ function createMockWavBuffer(durationSeconds: number, sampleRate = 16000, numCha
   header.write('data', 36);
   header.writeUInt32LE(dataSize, 40);
 
-  const data = Buffer.alloc(dataSize); // filled with zeros
+  const data = Buffer.alloc(dataSize);
+  // Fill with a non-zero signal (e.g. square wave) to avoid silent amplitude checks
+  for (let i = 0; i < dataSize; i += 2) {
+    const val = (i % 4 < 2) ? 1000 : -1000;
+    data.writeInt16LE(val, i);
+  }
   return Buffer.concat([header, data]);
 }
 
@@ -73,6 +78,11 @@ function createMockWavBufferWithPadding(durationSeconds: number): Buffer {
   header.writeUInt32LE(dataSize, 54);
 
   const data = Buffer.alloc(dataSize);
+  // Fill with a non-zero signal (e.g. square wave) to avoid silent amplitude checks
+  for (let i = 0; i < dataSize; i += 2) {
+    const val = (i % 4 < 2) ? 1000 : -1000;
+    data.writeInt16LE(val, i);
+  }
   return Buffer.concat([header, data]);
 }
 
@@ -404,6 +414,109 @@ describe('Phase 16-C: Speech Pronunciation Analysis Integration Tests', () => {
       expect(finalCount).toBe(initialCount);
 
       spy.mockRestore();
+    });
+
+    it('should reject WAV files with forged byteRate that does not match standard params (400 Bad Request)', async () => {
+      await request(app)
+        .post('/api/speech/consent')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ consentVersion: 'v1', userAgent: 'test' });
+
+      // Create a valid WAV buffer and overwrite the byteRate (at offset 28) with a forged huge value
+      const corruptWavBuffer = createMockWavBuffer(5);
+      corruptWavBuffer.writeUInt32LE(999999, 28); // forged byteRate
+
+      const corruptBase64 = corruptWavBuffer.toString('base64');
+
+      const res = await request(app)
+        .post('/api/speech/analyze')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          audioBase64: corruptBase64,
+          expectedText: 'Hello world',
+          languageCode: 'en-US'
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('WAV形式である必要があります');
+    });
+
+    it('should reject WAV files with inconsistent blockAlign (400 Bad Request)', async () => {
+      await request(app)
+        .post('/api/speech/consent')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ consentVersion: 'v1', userAgent: 'test' });
+
+      // Create a valid WAV buffer and overwrite the blockAlign (at offset 32) to be inconsistent
+      const corruptWavBuffer = createMockWavBuffer(5);
+      corruptWavBuffer.writeUInt16LE(99, 32); // forged blockAlign
+
+      const corruptBase64 = corruptWavBuffer.toString('base64');
+
+      const res = await request(app)
+        .post('/api/speech/analyze')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          audioBase64: corruptBase64,
+          expectedText: 'Hello world',
+          languageCode: 'en-US'
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('WAV形式である必要があります');
+    });
+
+    it('should return unclear scoring for all phonemes if the uploaded audio is completely silent', async () => {
+      await request(app)
+        .post('/api/speech/consent')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ consentVersion: 'v1', userAgent: 'test' });
+
+      // Create a WAV buffer filled with pure zeros (silence)
+      const sampleRate = 16000;
+      const numChannels = 1;
+      const bitsPerSample = 16;
+      const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
+      const blockAlign = (numChannels * bitsPerSample) / 8;
+      const dataSize = Math.floor(5 * byteRate);
+      const totalFileSize = 36 + dataSize;
+
+      const header = Buffer.alloc(44);
+      header.write('RIFF', 0);
+      header.writeUInt32LE(totalFileSize, 4);
+      header.write('WAVE', 8);
+      header.write('fmt ', 12);
+      header.writeUInt32LE(16, 16);
+      header.writeUInt16LE(1, 20);
+      header.writeUInt16LE(numChannels, 22);
+      header.writeUInt32LE(sampleRate, 24);
+      header.writeUInt32LE(byteRate, 28);
+      header.writeUInt16LE(blockAlign, 32);
+      header.writeUInt16LE(bitsPerSample, 34);
+      header.write('data', 36);
+      header.writeUInt32LE(dataSize, 40);
+
+      const silentData = Buffer.alloc(dataSize); // pure zeros
+      const silentBase64 = Buffer.concat([header, silentData]).toString('base64');
+
+      const res = await request(app)
+        .post('/api/speech/analyze')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          audioBase64: silentBase64,
+          expectedText: 'This is standard pronunciation',
+          languageCode: 'en-US'
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      
+      // Every phoneme must be downgraded to 'unclear' due to pure silence!
+      for (const w of res.body.words) {
+        for (const p of w.phonemes) {
+          expect(p.level).toBe('unclear');
+        }
+      }
     });
   });
 
