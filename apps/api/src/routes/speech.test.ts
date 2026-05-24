@@ -145,6 +145,47 @@ describe('Phase 16-C: Speech Pronunciation Analysis Integration Tests', () => {
       expect(res.body.error).toContain('録音時間は最大30秒までです');
     });
 
+    it('should reject malformed base64 strings containing invalid characters (400 Bad Request)', async () => {
+      await request(app)
+        .post('/api/speech/consent')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ consentVersion: 'v1', userAgent: 'test' });
+
+      const res = await request(app)
+        .post('/api/speech/analyze')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          audioBase64: 'invalid_base64_string_with_!',
+          expectedText: 'Hello world',
+          languageCode: 'en-US'
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Base64形式ではありません');
+    });
+
+    it('should reject non-WAV / non-RIFF audio binary headers (400 Bad Request)', async () => {
+      // Register consent first
+      await request(app)
+        .post('/api/speech/consent')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ consentVersion: 'v1', userAgent: 'test' });
+
+      const nonWavBase64 = Buffer.from('NOTRIFF..NOTWAVE..dummybinarydata').toString('base64');
+
+      const res = await request(app)
+        .post('/api/speech/analyze')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          audioBase64: nonWavBase64,
+          expectedText: 'Hello world',
+          languageCode: 'en-US'
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('WAV形式である必要があります');
+    });
+
     it('should enforce the daily quota of 50 requests per user', async () => {
       // 1. Consent
       await request(app)

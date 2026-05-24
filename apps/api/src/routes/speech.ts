@@ -167,10 +167,21 @@ router.post('/analyze', authMiddleware, async (req: AuthenticatedRequest, res: R
       return res.status(400).json({ error: '録音時間は最大30秒までです。' });
     }
 
+        // Validate Base64 format
+    const base64Regex = /^[A-Za-z0-9+/]+={0,2}$/;
+    if (!base64Regex.test(audioBase64)) {
+      return res.status(400).json({ error: '音声データが正しいBase64形式ではありません。' });
+    }
+
     const audioBuffer = Buffer.from(audioBase64, 'base64');
-    // Sanity check empty files
-    if (audioBuffer.length === 0) {
-      return res.status(400).json({ error: '音声データが空です。' });
+    
+    // Validate WAV/RIFF structure to block malformed/corrupted files (Constraint C-9)
+    if (
+      audioBuffer.length < 12 ||
+      audioBuffer.toString('ascii', 0, 4) !== 'RIFF' ||
+      audioBuffer.toString('ascii', 8, 12) !== 'WAVE'
+    ) {
+      return res.status(400).json({ error: '音声データは正しいWAV形式である必要があります。' });
     }
 
     // F. Symmetrical Deletion Audit Logging (Constraint C-1)
