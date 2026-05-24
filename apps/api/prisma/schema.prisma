@@ -84,6 +84,14 @@ model User {
   avatars                Avatar[]
   avatarQuotas           AvatarGenerationQuota[]
 
+  // Phase-16-C
+  speechAnalyticsConsent Boolean               @default(false)
+  speechAnalysisEnabled  Boolean               @default(true)
+  microphoneConsent      MicrophoneConsent?
+  speechDailyQuotas      SpeechDailyQuota[]
+  phonemeStruggles       PhonemeStruggle[]
+  speechAnalyses         SpeechAnalysis[]
+
   @@unique([tenantId, email])
   @@index([tenantId])
 }
@@ -449,4 +457,53 @@ model AvatarApprovalAudit {
   @@index([avatarId])
   @@index([moderatorId])
 }
+
+model MicrophoneConsent {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  consentedAt    DateTime @default(now())
+  consentVersion String
+  userAgent      String
+  ipHash         String
+  createdAt      DateTime @default(now())
+}
+
+model SpeechDailyQuota {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dayBucket  String   // e.g. "2026-05-24"
+  count      Int      @default(0)
+  resetAt    DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, dayBucket])
+  @@index([userId])
+}
+
+model PhonemeStruggle {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phoneme       String   // e.g. "r", "l", "th", "ae"
+  struggleCount Int      @default(0)
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, phoneme])
+  @@index([userId])
+}
+
+model SpeechAnalysis {
+  id             String    @id @default(uuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lessonId       String?
+  audioDeletedAt DateTime? // Deletion audit trail
+  createdAt      DateTime  @default(now())
+
+  @@index([userId])
+}
+
 

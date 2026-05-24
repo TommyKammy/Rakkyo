@@ -38,6 +38,8 @@ export class InMemoryUserRepository implements UserRepository {
       abuseLastAt: null,
       lockedUntil: null,
       badges: [],
+      speechAnalyticsConsent: false,
+      speechAnalysisEnabled: true,
       createdAt: new Date().toISOString(),
     };
     inMemoryState.users.push(newUser);
@@ -192,6 +194,12 @@ export class InMemoryUserRepository implements UserRepository {
     );
     inMemoryState.avatarQuotas = inMemoryState.avatarQuotas.filter(q => q.userId !== userId);
     inMemoryState.avatars = inMemoryState.avatars.filter(a => a.userId !== userId);
+
+    // Phase 16-C: Cascade delete in-memory mock speech records
+    inMemoryState.microphoneConsents = inMemoryState.microphoneConsents.filter(c => c.userId !== userId);
+    inMemoryState.phonemeStruggles = inMemoryState.phonemeStruggles.filter(s => s.userId !== userId);
+    inMemoryState.speechDailyQuotas = inMemoryState.speechDailyQuotas.filter(q => q.userId !== userId);
+    inMemoryState.speechAnalyses = inMemoryState.speechAnalyses.filter(a => a.userId !== userId);
 
     inMemoryState.parentalCelebrations = inMemoryState.parentalCelebrations.filter(c => c.childId !== userId);
     inMemoryState.attempts = inMemoryState.attempts.filter(a => a.userId !== userId);

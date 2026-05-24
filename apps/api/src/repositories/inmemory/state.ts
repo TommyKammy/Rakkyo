@@ -25,6 +25,8 @@ export interface UserMock {
   abuseLastAt: string | null;
   lockedUntil: string | null;
   badges: string[];
+  speechAnalyticsConsent?: boolean;
+  speechAnalysisEnabled?: boolean;
   createdAt: string;
 }
 
@@ -227,6 +229,42 @@ export interface ParentChildRelationMock {
   createdAt: string;
 }
 
+export interface MicrophoneConsentMock {
+  id: string;
+  userId: string;
+  consentedAt: string;
+  consentVersion: string;
+  userAgent: string;
+  ipHash: string;
+  createdAt: string;
+}
+
+export interface SpeechDailyQuotaMock {
+  id: string;
+  userId: string;
+  dayBucket: string;
+  count: number;
+  resetAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PhonemeStruggleMock {
+  id: string;
+  userId: string;
+  phoneme: string;
+  struggleCount: number;
+  updatedAt: string;
+}
+
+export interface SpeechAnalysisMock {
+  id: string;
+  userId: string;
+  lessonId: string | null;
+  audioDeletedAt: string | null;
+  createdAt: string;
+}
+
 class InMemoryState {
   tenants: TenantMock[] = [];
   users: UserMock[] = [];
@@ -255,6 +293,12 @@ class InMemoryState {
   avatars: AvatarMock[] = [];
   avatarQuotas: AvatarGenerationQuotaMock[] = [];
   avatarApprovalAudits: AvatarApprovalAuditMock[] = [];
+
+  // Phase-16-C: Speech Pronunciation Analysis Mock Arrays
+  microphoneConsents: MicrophoneConsentMock[] = [];
+  speechDailyQuotas: SpeechDailyQuotaMock[] = [];
+  phonemeStruggles: PhonemeStruggleMock[] = [];
+  speechAnalyses: SpeechAnalysisMock[] = [];
 
   constructor() {
     this.seed();
@@ -288,6 +332,12 @@ class InMemoryState {
     this.avatars = [];
     this.avatarQuotas = [];
     this.avatarApprovalAudits = [];
+
+    // Phase-16-C Reset
+    this.microphoneConsents = [];
+    this.speechDailyQuotas = [];
+    this.phonemeStruggles = [];
+    this.speechAnalyses = [];
 
     this.seed();
   }
@@ -331,6 +381,8 @@ class InMemoryState {
       abuseLastAt: null,
       lockedUntil: null,
       badges: ['🎉 冒険のはじまり'],
+      speechAnalyticsConsent: false,
+      speechAnalysisEnabled: true,
       createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
     });
 
@@ -354,6 +406,8 @@ class InMemoryState {
       abuseLastAt: null,
       lockedUntil: null,
       badges: [],
+      speechAnalyticsConsent: false,
+      speechAnalysisEnabled: true,
       createdAt: new Date().toISOString(),
     });
 
@@ -560,6 +614,8 @@ class InMemoryState {
         abuseLastAt: null,
         lockedUntil: null,
         badges: [],
+        speechAnalyticsConsent: false,
+        speechAnalysisEnabled: true,
         createdAt: new Date().toISOString()
       });
       // Enroll dummy students into test class
