@@ -217,18 +217,24 @@ router.post('/analyze', authMiddleware, async (req: AuthenticatedRequest, res: R
     console.error('Error during pronunciation analysis:', err);
     res.status(500).json({ error: '音声解析の実行中にエラーが発生しました。' });
   } finally {
+    let unlinkedSuccessfully = false;
+
     // K. Concentric Defense 1: Synchronous Physical self-destruction of raw voice files (Constraint C-1)
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       try {
         fs.unlinkSync(tempFilePath);
+        unlinkedSuccessfully = true;
         console.info(`[Speech API] Synchronously unlinked temporary file: ${tempFilePath}`);
       } catch (unlinkErr) {
         console.error(`[Speech API] Failed to synchronously unlink ${tempFilePath}:`, unlinkErr);
       }
+    } else {
+      // If no file was ever created/written, it counts as successfully "unlinked" (never existed on disk)
+      unlinkedSuccessfully = true;
     }
 
     // L. Update Deletion Audit Trail
-    if (auditRecordId) {
+    if (auditRecordId && unlinkedSuccessfully) {
       try {
         await repos.speech.updateSpeechAnalysisAuditDeleted(auditRecordId, new Date());
       } catch (auditErr) {
