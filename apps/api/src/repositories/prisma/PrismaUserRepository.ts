@@ -154,6 +154,20 @@ export class PrismaUserRepository implements UserRepository {
         where: { userId }
       });
 
+      // Phase 16-C: Cascade deletion of MicrophoneConsent, PhonemeStruggle, SpeechDailyQuota, and SpeechAnalysis
+      await tx.microphoneConsent.deleteMany({
+        where: { userId }
+      });
+      await tx.phonemeStruggle.deleteMany({
+        where: { userId }
+      });
+      await tx.speechDailyQuota.deleteMany({
+        where: { userId }
+      });
+      await tx.speechAnalysis.deleteMany({
+        where: { userId }
+      });
+
       await tx.parentalCelebration.deleteMany({
         where: { childId: userId }
       });
