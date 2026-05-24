@@ -6,6 +6,31 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
+function createMockWavBuffer(durationSeconds: number, sampleRate = 16000, numChannels = 1, bitsPerSample = 16): Buffer {
+  const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
+  const blockAlign = (numChannels * bitsPerSample) / 8;
+  const dataSize = Math.floor(durationSeconds * byteRate);
+  const totalFileSize = 36 + dataSize;
+
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(totalFileSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16); // Subchunk1Size
+  header.writeUInt16LE(1, 20); // AudioFormat (PCM = 1)
+  header.writeUInt16LE(numChannels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  const data = Buffer.alloc(dataSize); // filled with zeros
+  return Buffer.concat([header, data]);
+}
+
 describe('Phase 16-C: Speech Pronunciation Analysis Integration Tests', () => {
   let token: string;
   let userId: string;
@@ -105,7 +130,7 @@ describe('Phase 16-C: Speech Pronunciation Analysis Integration Tests', () => {
   });
 
   describe('発音解析 API ゲートチェック (/api/speech/analyze)', () => {
-    const validAudioBase64 = Buffer.from('RIFF....WAVEfmt....data....mockaudiobinary').toString('base64');
+    const validAudioBase64 = createMockWavBuffer(5).toString('base64');
 
     it('should reject requests without microphone safety consent (403 Forbidden)', async () => {
       // No consent registered in beforeEach. Call analyze immediately.
@@ -129,8 +154,8 @@ describe('Phase 16-C: Speech Pronunciation Analysis Integration Tests', () => {
         .set('Authorization', `Bearer ${token}`)
         .send({ consentVersion: 'v1', userAgent: 'test' });
 
-      // Generate base64 audio block > 1.5MB to simulate overlength
-      const longBase64 = 'A'.repeat(1600000);
+      // Generate structurally valid WAV > 30 seconds (35s) to simulate overlength
+      const longBase64 = createMockWavBuffer(35).toString('base64');
 
       const res = await request(app)
         .post('/api/speech/analyze')
@@ -222,7 +247,7 @@ describe('Phase 16-C: Speech Pronunciation Analysis Integration Tests', () => {
   });
 
   describe('音素信頼度の離散化 & レスポンス検証 (Constraint C-3)', () => {
-    const validAudioBase64 = Buffer.from('RIFF....WAVEfmt....data....mockaudiobinary').toString('base64');
+    const validAudioBase64 = createMockWavBuffer(5).toString('base64');
 
     beforeEach(async () => {
       // Register consent
@@ -259,7 +284,7 @@ describe('Phase 16-C: Speech Pronunciation Analysis Integration Tests', () => {
   });
 
   describe('つまずきカルテ & 保護者オプトイン検証 (Constraint C-4)', () => {
-    const validAudioBase64 = Buffer.from('RIFF....WAVEfmt....data....mockaudiobinary').toString('base64');
+    const validAudioBase64 = createMockWavBuffer(5).toString('base64');
 
     beforeEach(async () => {
       // Register consent
@@ -318,7 +343,7 @@ describe('Phase 16-C: Speech Pronunciation Analysis Integration Tests', () => {
   });
 
   describe('7秒自己破棄・監査ログ & ファイルスイーパー検証 (Constraint C-1)', () => {
-    const validAudioBase64 = Buffer.from('RIFF....WAVEfmt....data....mockaudiobinary').toString('base64');
+    const validAudioBase64 = createMockWavBuffer(5).toString('base64');
 
     beforeEach(async () => {
       // Register consent

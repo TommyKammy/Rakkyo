@@ -9,6 +9,57 @@ import { SPEECH_TEMP_DIR } from '../services/SpeechFileSweeper';
 
 const router = Router();
 
+function getWavDuration(buffer: Buffer): number {
+  if (buffer.length < 44) {
+    throw new Error('音声ファイルサイズが小さすぎます。');
+  }
+
+  // Verify 'RIFF' and 'WAVE'
+  if (buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WAVE') {
+    throw new Error('サポートされている音声フォーマット（WAV）ではありません。');
+  }
+
+  // Find the 'fmt ' chunk
+  let fmtOffset = 12;
+  while (fmtOffset + 8 < buffer.length) {
+    const chunkId = buffer.toString('ascii', fmtOffset, fmtOffset + 4);
+    if (chunkId === 'fmt ') {
+      break;
+    }
+    const chunkSize = Math.max(1, buffer.readUInt32LE(fmtOffset + 4));
+    fmtOffset += 8 + chunkSize;
+  }
+
+  if (fmtOffset + 24 > buffer.length) {
+    throw new Error('WAVファイル構造が不正です（fmt チャンクが見つかりません）。');
+  }
+
+  const byteRate = buffer.readUInt32LE(fmtOffset + 16);
+  if (byteRate === 0) {
+    throw new Error('WAVファイル構造が不正です（バイトレートが0です）。');
+  }
+
+  // Find the 'data' chunk
+  let dataOffset = fmtOffset + 8 + buffer.readUInt32LE(fmtOffset + 4);
+  let dataSize = 0;
+  while (dataOffset + 8 <= buffer.length) {
+    const chunkId = buffer.toString('ascii', dataOffset, dataOffset + 4);
+    if (chunkId === 'data') {
+      dataSize = buffer.readUInt32LE(dataOffset + 4);
+      break;
+    }
+    const chunkSize = Math.max(1, buffer.readUInt32LE(dataOffset + 4));
+    dataOffset += 8 + chunkSize;
+  }
+
+  if (dataSize === 0) {
+    // Fallback: estimate from remaining buffer length
+    dataSize = buffer.length - (fmtOffset + 8 + buffer.readUInt32LE(fmtOffset + 4));
+  }
+
+  return dataSize / byteRate;
+}
+
 const consentSchema = z.object({
   consentVersion: z.string().max(50),
   userAgent: z.string().max(255)
@@ -173,15 +224,18 @@ router.post('/analyze', authMiddleware, async (req: AuthenticatedRequest, res: R
       return res.status(400).json({ error: '音声データが正しいBase64形式ではありません。' });
     }
 
-    const audioBuffer = Buffer.from(audioBase64, 'base64');
+        const audioBuffer = Buffer.from(audioBase64, 'base64');
     
-    // Validate WAV/RIFF structure to block malformed/corrupted files (Constraint C-9)
-    if (
-      audioBuffer.length < 12 ||
-      audioBuffer.toString('ascii', 0, 4) !== 'RIFF' ||
-      audioBuffer.toString('ascii', 8, 12) !== 'WAVE'
-    ) {
+    // Validate WAV / RIFF structure and duration (Constraint C-9 & P2 review recommendation)
+    let durationSeconds = 0;
+    try {
+      durationSeconds = getWavDuration(audioBuffer);
+    } catch (wavErr: any) {
       return res.status(400).json({ error: '音声データは正しいWAV形式である必要があります。' });
+    }
+
+    if (durationSeconds > 30.1) {
+      return res.status(400).json({ error: '録音時間は最大30秒までです。' });
     }
 
     // F. Symmetrical Deletion Audit Logging (Constraint C-1)
