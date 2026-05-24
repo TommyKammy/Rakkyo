@@ -2,6 +2,7 @@ import request from 'supertest';
 import app from '../app';
 import { inMemoryState } from '../repositories/inmemory/state';
 import { speechFileSweeper, SPEECH_TEMP_DIR } from '../services/SpeechFileSweeper';
+import { speechAnalysisService } from '../services/SpeechAnalysisService';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -28,6 +29,50 @@ function createMockWavBuffer(durationSeconds: number, sampleRate = 16000, numCha
   header.writeUInt32LE(dataSize, 40);
 
   const data = Buffer.alloc(dataSize); // filled with zeros
+  return Buffer.concat([header, data]);
+}
+
+function createMockWavBufferWithPadding(durationSeconds: number): Buffer {
+  const sampleRate = 16000;
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
+  const blockAlign = (numChannels * bitsPerSample) / 8;
+  const dataSize = Math.floor(durationSeconds * byteRate);
+
+  // Total size calculation:
+  // RIFF header (12 bytes)
+  // fmt subchunk (8 bytes header + 16 bytes payload = 24 bytes)
+  // junk subchunk (8 bytes header + 5 bytes payload + 1 byte padding = 14 bytes)
+  // data subchunk (8 bytes header + dataSize bytes payload)
+  const totalFileSize = 12 + 24 + 14 + 8 + dataSize;
+
+  const header = Buffer.alloc(58);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(totalFileSize - 8, 4);
+  header.write('WAVE', 8);
+
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(numChannels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+
+  // Odd length chunk 'junk' with size 5
+  header.write('junk', 36);
+  header.writeUInt32LE(5, 40);
+  header.write('abcde', 44); // 5 bytes of data
+  // padding byte at offset 49:
+  header.writeUInt8(0, 49);
+
+  // data chunk header starting at 50
+  header.write('data', 50);
+  header.writeUInt32LE(dataSize, 54);
+
+  const data = Buffer.alloc(dataSize);
   return Buffer.concat([header, data]);
 }
 
@@ -243,6 +288,122 @@ describe('Phase 16-C: Speech Pronunciation Analysis Integration Tests', () => {
 
       expect(res.status).toBe(429);
       expect(res.body.error).toContain('本日の発音練習の上限（50回）に達しました');
+    });
+
+    it('should reject WAV files with invalid or corrupt chunk sizes that exceed the buffer size', async () => {
+      // Register consent first
+      await request(app)
+        .post('/api/speech/consent')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ consentVersion: 'v1', userAgent: 'test' });
+
+      // Create a WAV buffer and overwrite the data chunk size (at offset 40) with an extremely large size
+      const corruptWavBuffer = createMockWavBuffer(5);
+      corruptWavBuffer.writeUInt32LE(0xffffffff, 40); // huge chunk size
+
+      const corruptBase64 = corruptWavBuffer.toString('base64');
+
+      const res = await request(app)
+        .post('/api/speech/analyze')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          audioBase64: corruptBase64,
+          expectedText: 'Hello world',
+          languageCode: 'en-US'
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('WAV形式である必要があります');
+    });
+
+    it('should parse and accept WAV files with odd-size subchunks that require padding alignment', async () => {
+      // Register consent first
+      await request(app)
+        .post('/api/speech/consent')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ consentVersion: 'v1', userAgent: 'test' });
+
+      // Create a mock WAV buffer with an odd-size subchunk and proper padding alignment
+      const paddedWavBuffer = createMockWavBufferWithPadding(5);
+      const paddedBase64 = paddedWavBuffer.toString('base64');
+
+      const res = await request(app)
+        .post('/api/speech/analyze')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          audioBase64: paddedBase64,
+          expectedText: 'Hello world',
+          languageCode: 'en-US'
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.words).toBeDefined();
+    });
+
+    it('should reject WAV files that completely lack a data chunk', async () => {
+      // Register consent first
+      await request(app)
+        .post('/api/speech/consent')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ consentVersion: 'v1', userAgent: 'test' });
+
+      // Create a WAV buffer and overwrite the 'data' chunk ID with 'junk'
+      const nodataWavBuffer = createMockWavBuffer(5);
+      nodataWavBuffer.write('junk', 36); // replace 'data' with 'junk'
+
+      const nodataBase64 = nodataWavBuffer.toString('base64');
+
+      const res = await request(app)
+        .post('/api/speech/analyze')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          audioBase64: nodataBase64,
+          expectedText: 'Hello world',
+          languageCode: 'en-US'
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('WAV形式である必要があります');
+    });
+
+    it('should not charge user daily quota if the speech analysis service execution fails', async () => {
+      // 1. Consent
+      await request(app)
+        .post('/api/speech/consent')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ consentVersion: 'v1', userAgent: 'test' });
+
+      // 2. Check starting daily quota count (should be empty/non-existent or 0)
+      const jstTime = new Date(Date.now() + 9 * 60 * 60 * 1000);
+      const dayBucket = jstTime.toISOString().split('T')[0];
+      const initialQuota = inMemoryState.speechDailyQuotas.find(q => q.userId === userId && q.dayBucket === dayBucket);
+      const initialCount = initialQuota ? initialQuota.count : 0;
+
+      // 3. Mock the STT service to throw a hard error
+      const spy = jest.spyOn(speechAnalysisService, 'analyzePronunciation').mockRejectedValueOnce(
+        new Error('Transient STT Service Error')
+      );
+
+      // 4. Perform analyze call
+      const res = await request(app)
+        .post('/api/speech/analyze')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          audioBase64: validAudioBase64,
+          expectedText: 'Hello world',
+          languageCode: 'en-US'
+        });
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toContain('音声解析の実行中にエラーが発生しました');
+
+      // 5. Verify the daily quota has NOT incremented
+      const finalQuota = inMemoryState.speechDailyQuotas.find(q => q.userId === userId && q.dayBucket === dayBucket);
+      const finalCount = finalQuota ? finalQuota.count : 0;
+      expect(finalCount).toBe(initialCount);
+
+      spy.mockRestore();
     });
   });
 

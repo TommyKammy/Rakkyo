@@ -15,7 +15,7 @@ import speechRouter from './routes/speech';
 
 const app = express();
 
-app.set('trust proxy', true);
+app.set('trust proxy', 1); // Trust only the immediate upstream reverse proxy (prevents IP spoofing)
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));

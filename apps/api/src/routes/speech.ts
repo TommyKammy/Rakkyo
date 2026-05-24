@@ -19,18 +19,34 @@ function getWavDuration(buffer: Buffer): number {
     throw new Error('サポートされている音声フォーマット（WAV）ではありません。');
   }
 
-  // Find the 'fmt ' chunk
-  let fmtOffset = 12;
-  while (fmtOffset + 8 < buffer.length) {
-    const chunkId = buffer.toString('ascii', fmtOffset, fmtOffset + 4);
-    if (chunkId === 'fmt ') {
-      break;
+  let offset = 12;
+  let fmtOffset = -1;
+  let dataSize = -1;
+
+  while (offset + 8 <= buffer.length) {
+    const chunkId = buffer.toString('ascii', offset, offset + 4);
+    const chunkSize = buffer.readUInt32LE(offset + 4);
+
+    // Reject invalid WAV chunk sizes before duration fallback
+    if (offset + 8 + chunkSize > buffer.length) {
+      throw new Error('WAVチャンクサイズがバッファサイズを超えています。');
     }
-    const chunkSize = Math.max(1, buffer.readUInt32LE(fmtOffset + 4));
-    fmtOffset += 8 + chunkSize;
+
+    if (chunkId === 'fmt ') {
+      if (chunkSize < 16) {
+        throw new Error('WAVファイル構造が不正です（fmtチャンクが小さすぎます）。');
+      }
+      fmtOffset = offset;
+    } else if (chunkId === 'data') {
+      dataSize = chunkSize;
+    }
+
+    // RIFF specification dictates chunks must be padded to even byte boundaries
+    const padding = chunkSize % 2;
+    offset += 8 + chunkSize + padding;
   }
 
-  if (fmtOffset + 24 > buffer.length) {
+  if (fmtOffset === -1) {
     throw new Error('WAVファイル構造が不正です（fmt チャンクが見つかりません）。');
   }
 
@@ -39,22 +55,9 @@ function getWavDuration(buffer: Buffer): number {
     throw new Error('WAVファイル構造が不正です（バイトレートが0です）。');
   }
 
-  // Find the 'data' chunk
-  let dataOffset = fmtOffset + 8 + buffer.readUInt32LE(fmtOffset + 4);
-  let dataSize = 0;
-  while (dataOffset + 8 <= buffer.length) {
-    const chunkId = buffer.toString('ascii', dataOffset, dataOffset + 4);
-    if (chunkId === 'data') {
-      dataSize = buffer.readUInt32LE(dataOffset + 4);
-      break;
-    }
-    const chunkSize = Math.max(1, buffer.readUInt32LE(dataOffset + 4));
-    dataOffset += 8 + chunkSize;
-  }
-
-  if (dataSize === 0) {
-    // Fallback: estimate from remaining buffer length
-    dataSize = buffer.length - (fmtOffset + 8 + buffer.readUInt32LE(fmtOffset + 4));
+  // Require an actual data chunk in WAV validation
+  if (dataSize === -1) {
+    throw new Error('WAVファイル構造が不正です（data チャンクが見つかりません）。');
   }
 
   return dataSize / byteRate;
@@ -250,15 +253,15 @@ router.post('/analyze', authMiddleware, async (req: AuthenticatedRequest, res: R
     tempFilePath = path.join(SPEECH_TEMP_DIR, `speech_${fileUUID}.wav`);
     fs.writeFileSync(tempFilePath, audioBuffer);
 
-    // H. Increment quota atomically
-    await repos.speech.incrementDailyQuota(userId, dayBucket, nextUtcReset);
-
     // I. Speech-to-Text Phoneme Alignment Processing
     const analysisResult = await speechAnalysisService.analyzePronunciation(
       tempFilePath,
       expectedText,
       languageCode
     );
+
+    // H. Increment quota atomically (Charge only after successful analysis)
+    await repos.speech.incrementDailyQuota(userId, dayBucket, nextUtcReset);
 
     // J. Parent Analytics Opt-In: Accumulate Phoneme Struggles (Constraint C-4: default OFF)
     if (userRecord.speechAnalyticsConsent) {
