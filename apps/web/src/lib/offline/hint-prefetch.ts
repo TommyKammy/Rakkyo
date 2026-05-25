@@ -103,7 +103,7 @@ export async function prefetchAiCache(
     if (!response.ok) return;
 
     const data = await response.json();
-    for (const entry of data.entries.slice(0, HINT_PREFETCH_COUNT)) {
+    for (const entry of data.entries.slice(0, HINT_PREFETCH_COUNT).reverse()) {
       const diagnosisJson = JSON.stringify(entry.diagnosis);
       const sizeBytes = new TextEncoder().encode(diagnosisJson).length;
 

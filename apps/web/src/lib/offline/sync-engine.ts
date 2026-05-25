@@ -116,164 +116,172 @@ export async function flushPendingAttempts(
     [SYNC_STATUS.PENDING, SYNC_STATUS.SYNCING]
   );
 
-  // Get pending attempts (oldest first) - retry FAILED attempts as well
-  const pending = db.selectAll<PendingAttempt>(
-    `SELECT * FROM offline_attempts
-     WHERE syncStatus = ? OR syncStatus = ?
-     ORDER BY createdAt ASC
-     LIMIT ?`,
-    [SYNC_STATUS.PENDING, SYNC_STATUS.FAILED, MAX_SYNC_BATCH_SIZE]
-  );
-
-  if (pending.length === 0) {
-    return { synced: 0, duplicates: 0, failed: 0 };
-  }
-
-  let synced = 0;
-  let duplicates = 0;
-  let failed = 0;
+  let totalSynced = 0;
+  let totalDuplicates = 0;
+  let totalFailed = 0;
   let serverStats: { currentXp: number; level: number; streakCount: number } | undefined;
 
-  for (let i = 0; i < pending.length; i++) {
-    const p = pending[i];
-
-    // Mark current attempt as SYNCING
-    db.exec(
-      `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
-      [SYNC_STATUS.SYNCING, p.clientEventId]
+  while (true) {
+    // Get pending attempts (oldest first) - retry FAILED attempts as well
+    const pending = db.selectAll<PendingAttempt>(
+      `SELECT * FROM offline_attempts
+       WHERE syncStatus = ? OR syncStatus = ?
+       ORDER BY createdAt ASC
+       LIMIT ?`,
+      [SYNC_STATUS.PENDING, SYNC_STATUS.FAILED, MAX_SYNC_BATCH_SIZE]
     );
 
-    // D-7: Throttle per attempt upload to prevent server side bursty traffic (P2-12)
-    if (i > 0) {
-      await sleep(SYNC_RATE_LIMIT_MS);
+    if (pending.length === 0) {
+      break;
     }
 
-    // D-8: Decrypt the answerSubmitted field
-    let answer = p.answerSubmitted;
-    try {
-      const key = await getUserKey(p.userId);
-      if (!key) {
-        throw new Error('Encryption key is missing - cannot decrypt attempt');
+    for (let i = 0; i < pending.length; i++) {
+      const p = pending[i];
+
+      // Mark current attempt as SYNCING
+      db.exec(
+        `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
+        [SYNC_STATUS.SYNCING, p.clientEventId]
+      );
+
+      // D-7: Throttle per attempt upload to prevent server side bursty traffic (P2-12)
+      if (totalSynced > 0 || totalDuplicates > 0 || totalFailed > 0 || i > 0) {
+        await sleep(SYNC_RATE_LIMIT_MS);
       }
-      answer = await decrypt(p.answerSubmitted, key);
-    } catch (e) {
-      console.error('Failed to decrypt local attempt answer for sync:', e);
-      answer = 'WIPED_OR_CORRUPT_DATA';
-    }
 
-    const attemptInput = {
-      clientEventId: p.clientEventId,
-      userId: p.userId,
-      questionId: p.questionId,
-      isCorrect: Boolean(p.isCorrect),
-      hintsUsed: p.hintsUsed,
-      answerSubmitted: answer,
-      durationSeconds: p.durationSeconds,
-      errorType: p.errorType,
-      createdAt: p.createdAt,
-    };
+      // D-8: Decrypt the answerSubmitted field
+      let answer = p.answerSubmitted;
+      try {
+        const key = await getUserKey(p.userId);
+        if (!key) {
+          throw new Error('Encryption key is missing - cannot decrypt attempt');
+        }
+        answer = await decrypt(p.answerSubmitted, key);
+      } catch (e) {
+        console.error('Failed to decrypt local attempt answer for sync:', e);
+        answer = 'WIPED_OR_CORRUPT_DATA';
+      }
 
-    try {
-      const response = await fetch(`${API_BASE}/api/sync/batch`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          attempts: [attemptInput],
-          schemaVersion: OFFLINE_SCHEMA_VERSION,
-          deviceId,
-        }),
-      });
+      const attemptInput = {
+        clientEventId: p.clientEventId,
+        userId: p.userId,
+        questionId: p.questionId,
+        isCorrect: Boolean(p.isCorrect),
+        hintsUsed: p.hintsUsed,
+        answerSubmitted: answer,
+        durationSeconds: p.durationSeconds,
+        errorType: p.errorType,
+        createdAt: p.createdAt,
+      };
 
-      // D-4: JWT expired — revert current and remaining attempts to PENDING, do NOT delete local data
-      if (response.status === 401) {
-        const remaining = pending.slice(i);
-        for (const rem of remaining) {
+      try {
+        const response = await fetch(`${API_BASE}/api/sync/batch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            attempts: [attemptInput],
+            schemaVersion: OFFLINE_SCHEMA_VERSION,
+            deviceId,
+          }),
+        });
+
+        // D-4: JWT expired — revert current and remaining attempts to PENDING, do NOT delete local data
+        if (response.status === 401) {
+          const remaining = pending.slice(i);
+          for (const rem of remaining) {
+            db.exec(
+              `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
+              [SYNC_STATUS.PENDING, rem.clientEventId]
+            );
+          }
+          return {
+            synced: totalSynced,
+            duplicates: totalDuplicates,
+            failed: totalFailed,
+            serverStats,
+            jwtExpired: true,
+          };
+        }
+
+        // D-6: Schema version mismatch — revert current and remaining to PENDING, count them as failed
+        if (response.status === 409) {
+          const remaining = pending.slice(i);
+          for (const rem of remaining) {
+            db.exec(
+              `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
+              [SYNC_STATUS.PENDING, rem.clientEventId]
+            );
+          }
+          return {
+            synced: totalSynced,
+            duplicates: totalDuplicates,
+            failed: totalFailed + remaining.length,
+            serverStats,
+          };
+        }
+
+        if (!response.ok) {
+          // Server/Network error for this attempt — revert to PENDING for retry later
           db.exec(
             `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
-            [SYNC_STATUS.PENDING, rem.clientEventId]
+            [SYNC_STATUS.PENDING, p.clientEventId]
           );
+          totalFailed++;
+          continue;
         }
-        return { synced, duplicates, failed, serverStats, jwtExpired: true };
-      }
 
-      // D-6: Schema version mismatch — revert current and remaining to PENDING, count them as failed
-      if (response.status === 409) {
-        const remaining = pending.slice(i);
-        for (const rem of remaining) {
+        const result = await response.json();
+        if (result.serverStats) {
+          serverStats = result.serverStats;
+        }
+
+        const r = result.results?.[0];
+        if (r) {
+          if (r.status === 'created') {
+            totalSynced++;
+            db.exec(
+              `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
+              [SYNC_STATUS.SYNCED, r.clientEventId]
+            );
+          } else if (r.status === 'duplicate') {
+            totalDuplicates++;
+            db.exec(
+              `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
+              [SYNC_STATUS.SYNCED, r.clientEventId]
+            );
+          } else {
+            totalFailed++;
+            db.exec(
+              `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
+              [SYNC_STATUS.FAILED, r.clientEventId]
+            );
+          }
+        } else {
+          totalFailed++;
           db.exec(
             `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
-            [SYNC_STATUS.PENDING, rem.clientEventId]
+            [SYNC_STATUS.FAILED, p.clientEventId]
           );
         }
-        return {
-          synced,
-          duplicates,
-          failed: failed + remaining.length,
-          serverStats,
-        };
-      }
-
-      if (!response.ok) {
-        // Server/Network error for this attempt — revert to PENDING for retry later
+      } catch (err) {
+        console.error('Network error during offline sync:', err);
+        // Revert current attempt to PENDING (D-1: don't lose data)
         db.exec(
           `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
           [SYNC_STATUS.PENDING, p.clientEventId]
         );
-        failed++;
-        continue;
+        totalFailed++;
       }
-
-      const result = await response.json();
-      if (result.serverStats) {
-        serverStats = result.serverStats;
-      }
-
-      const r = result.results?.[0];
-      if (r) {
-        if (r.status === 'created') {
-          synced++;
-          db.exec(
-            `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
-            [SYNC_STATUS.SYNCED, r.clientEventId]
-          );
-        } else if (r.status === 'duplicate') {
-          duplicates++;
-          db.exec(
-            `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
-            [SYNC_STATUS.SYNCED, r.clientEventId]
-          );
-        } else {
-          failed++;
-          db.exec(
-            `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
-            [SYNC_STATUS.FAILED, r.clientEventId]
-          );
-        }
-      } else {
-        failed++;
-        db.exec(
-          `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
-          [SYNC_STATUS.FAILED, p.clientEventId]
-        );
-      }
-    } catch (err) {
-      console.error('Network error during offline sync:', err);
-      // Revert current attempt to PENDING (D-1: don't lose data)
-      db.exec(
-        `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
-        [SYNC_STATUS.PENDING, p.clientEventId]
-      );
-      failed++;
     }
   }
 
   return {
-    synced,
-    duplicates,
-    failed,
+    synced: totalSynced,
+    duplicates: totalDuplicates,
+    failed: totalFailed,
     serverStats,
   };
 }

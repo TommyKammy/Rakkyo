@@ -545,7 +545,7 @@ function ExerciseScreenContent() {
       }
 
       // Hard fallback: use question structure hints
-      const q = questions[currentQIdx];
+      const q = currentQuestion;
       const staticHints = q?.hints || [];
       const fallbackHint = staticHints[stageNum - 1] || staticHints[staticHints.length - 1] || "もう一度ゆっくり考えてみてね。";
       setAiHints(prev => ({ ...prev, [stageNum]: fallbackHint }));

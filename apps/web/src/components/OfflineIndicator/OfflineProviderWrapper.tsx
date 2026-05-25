@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { OfflineIndicator } from './OfflineIndicator';
 import {
   registerServiceWorker,
@@ -19,17 +19,30 @@ export function OfflineProviderWrapper() {
   const [swRegistration, setSwRegistration] =
     useState<ServiceWorkerRegistration | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
+  const isSyncingRef = useRef(false);
 
   // Sync trigger handler that flushes local SQLite queue using the sync engine
   const handleSyncTrigger = useCallback(async () => {
+    if (isSyncingRef.current) {
+      console.log('Offline sync is already in progress, skipping concurrent trigger.');
+      return;
+    }
+    isSyncingRef.current = true;
+
     const token = localStorage.getItem('rakkyo_token');
     const userStr = localStorage.getItem('rakkyo_user');
-    if (!token || !userStr) return;
+    if (!token || !userStr) {
+      isSyncingRef.current = false;
+      return;
+    }
 
     try {
       const user = JSON.parse(userStr);
       const userId = user.id;
-      if (!userId) return;
+      if (!userId) {
+        isSyncingRef.current = false;
+        return;
+      }
 
       const { openUserDb } = await import('@/lib/offline/db');
       const { flushPendingAttempts, getPendingCount } = await import(
@@ -51,6 +64,14 @@ export function OfflineProviderWrapper() {
       const count = getPendingCount(db);
       setPendingCount(count);
 
+      // Handle expired JWT token — wipe localDB credentials and reload page (P2-4)
+      if (res.jwtExpired) {
+        console.warn('⚠️ JWT has expired during offline sync flush. Redirecting to login...');
+        await handleLogout(userId);
+        window.location.reload();
+        return;
+      }
+
       // If authoritative stats returned, update in local profile (D-2)
       if (res.serverStats) {
         const updatedUser = { ...user, ...res.serverStats };
@@ -58,6 +79,8 @@ export function OfflineProviderWrapper() {
       }
     } catch (err) {
       console.error('Failed to trigger offline auto-sync:', err);
+    } finally {
+      isSyncingRef.current = false;
     }
   }, []);
 
