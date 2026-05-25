@@ -169,22 +169,28 @@ export class InMemoryCurriculumRepository implements CurriculumRepository {
   async findQuestionsByLessonId(lessonId: string): Promise<any[]> {
     const dynamicQs = inMemoryState.dynamicQuestions.filter(q => q.lessonId === lessonId);
     
-    let staticQs: any[] = [];
+    const staticQs: any[] = [];
     for (const curriculum of allCurriculums) {
       for (const unit of curriculum.units) {
         for (const lesson of unit.lessons) {
           if (lesson.name === lessonId) {
-            staticQs = lesson.questions.map(q => ({
+            staticQs.push(...lesson.questions.map(q => ({
               id: q.id || q.prompt,
               hints: q.hints || []
-            }));
-            break;
+            })));
           }
         }
       }
     }
     
-    return [...dynamicQs, ...staticQs];
+    // Merge and deduplicate by ID / prompt (P2-10)
+    const merged = [...dynamicQs];
+    for (const sq of staticQs) {
+      if (!merged.some(mq => mq.id === sq.id || mq.prompt === sq.id)) {
+        merged.push(sq);
+      }
+    }
+    return merged;
   }
 }
 

@@ -7,7 +7,7 @@ export const SyncAttemptSchema = z.object({
   questionId: z.string(),
   isCorrect: z.boolean(),
   hintsUsed: z.number().int().min(0).max(10),
-  answerSubmitted: z.string().max(1000),
+  answerSubmitted: z.string().max(5000),
   durationSeconds: z.number().int().min(0).max(7200).nullable().optional(),
   errorType: z.string().max(100).nullable().optional(),
   createdAt: z.string().datetime(),

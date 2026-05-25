@@ -1,5 +1,5 @@
 import { SyncRepository } from '../repositories/SyncRepository';
-import { ABUSE_WINDOW_MS } from '@rakkyo/shared';
+import { ABUSE_WINDOW_MS, SYNC_RATE_LIMIT_MS } from '@rakkyo/shared';
 
 /** Individual attempt sync result for the batch response. */
 interface AttemptSyncResult {
@@ -60,8 +60,15 @@ export class SyncService {
     const results: AttemptSyncResult[] = [];
     const now = new Date();
 
+    let isFirst = true;
     for (const attempt of attempts) {
       try {
+        if (!isFirst && process.env.NODE_ENV !== 'test') {
+          // D-7: Throttle database update attempts (1 entry/sec) to prevent load/abuse bursts (P2-11)
+          await new Promise((resolve) => setTimeout(resolve, SYNC_RATE_LIMIT_MS));
+        }
+        isFirst = false;
+
         const attemptDate = new Date(attempt.createdAt);
 
         // D-7: Offline attempts older than 1h are outside the abuse window.

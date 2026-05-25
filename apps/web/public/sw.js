@@ -179,6 +179,10 @@ self.addEventListener('message', (event) => {
  */
 async function notifyClientsToSync() {
   const clients = await self.clients.matchAll({ type: 'window' });
+  if (!clients || clients.length === 0) {
+    // Throw error to tell browser that sync failed and should be retried later when a window is active (P1-8)
+    throw new Error('No active client windows available for sync');
+  }
   clients.forEach((client) => {
     client.postMessage({ type: 'TRIGGER_SYNC' });
   });

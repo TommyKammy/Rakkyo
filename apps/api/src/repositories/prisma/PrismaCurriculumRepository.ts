@@ -158,27 +158,37 @@ export class PrismaCurriculumRepository implements CurriculumRepository {
   }
 
   async findQuestionsByLessonId(lessonId: string): Promise<any[]> {
+    const dbQs: any[] = [];
     try {
-      const dbQs = await prisma.question.findMany({
+      const found = await prisma.question.findMany({
         where: { lessonId }
       });
-      if (dbQs && dbQs.length > 0) return dbQs;
+      dbQs.push(...found);
     } catch (e) {
       console.warn('⚠️ Database query failed when finding questions by lesson ID. Falling back to local curriculum search.', e);
     }
 
+    const staticQs: any[] = [];
     for (const curriculum of allCurriculums) {
       for (const unit of curriculum.units) {
         for (const lesson of unit.lessons) {
           if (lesson.name === lessonId) {
-            return lesson.questions.map(q => ({
+            staticQs.push(...lesson.questions.map(q => ({
               id: q.id || q.prompt,
               hints: q.hints || []
-            }));
+            })));
           }
         }
       }
     }
-    return [];
+
+    // Merge and deduplicate by question ID/prompt (P2-10)
+    const merged = [...dbQs];
+    for (const sq of staticQs) {
+      if (!merged.some(mq => mq.id === sq.id || mq.prompt === sq.id)) {
+        merged.push(sq);
+      }
+    }
+    return merged;
   }
 }

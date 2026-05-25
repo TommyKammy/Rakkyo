@@ -518,7 +518,38 @@ function ExerciseScreenContent() {
         }
       }
     } catch (e) {
-      console.warn("⚠️ Failed to fetch AI hint. Falling back to static curriculum hints.", e);
+      console.warn("⚠️ Failed to fetch AI hint. Falling back to offline local cache or static hints.", e);
+      
+      const userStr = localStorage.getItem("rakkyo_user");
+      if (userStr && currentQuestion) {
+        try {
+          const u = JSON.parse(userStr);
+          const { openUserDb } = await import('@/lib/offline/db');
+          const { getCachedHints } = await import('@/lib/offline/hint-prefetch');
+          const db = await openUserDb(u.id);
+          const cached = getCachedHints(db, currentQuestion.id || currentQuestion.prompt);
+          
+          if (cached && cached.hints && cached.hints.length > 0) {
+            const index = Math.min(stageNum - 1, cached.hints.length - 1);
+            const cachedHintText = cached.hints[index];
+            if (cachedHintText) {
+              setAiHints(prev => ({ ...prev, [stageNum]: cachedHintText }));
+              speakText(cachedHintText, `hint${stageNum}`, "neutral");
+              setIsLoadingHint(false);
+              return;
+            }
+          }
+        } catch (err) {
+          console.error("Failed to read cached hints:", err);
+        }
+      }
+
+      // Hard fallback: use question structure hints
+      const q = questions[currentQIdx];
+      const staticHints = q?.hints || [];
+      const fallbackHint = staticHints[stageNum - 1] || staticHints[staticHints.length - 1] || "もう一度ゆっくり考えてみてね。";
+      setAiHints(prev => ({ ...prev, [stageNum]: fallbackHint }));
+      speakText(fallbackHint, `hint${stageNum}`, "neutral");
     } finally {
       setIsLoadingHint(false);
     }
@@ -545,9 +576,24 @@ function ExerciseScreenContent() {
     }
 
     try {
-      setUser(JSON.parse(userStr));
+      const parsedUser = JSON.parse(userStr);
+      setUser(parsedUser);
       const outfit = localStorage.getItem("rakkyo_outfit") || "none";
       setCurrentOutfit(outfit);
+
+      // Prefetch hints and AI cache in the background for offline readiness (P2-4)
+      if (parsedUser && parsedUser.id) {
+        import('@/lib/offline/db').then(async ({ openUserDb }) => {
+          try {
+            const db = await openUserDb(parsedUser.id);
+            const { prefetchHints, prefetchAiCache } = await import('@/lib/offline/hint-prefetch');
+            prefetchHints(db, lesson.name, token);
+            prefetchAiCache(db, token);
+          } catch (err) {
+            console.warn('Failed to background prefetch offline cache:', err);
+          }
+        });
+      }
     } catch (e) {
       router.push("/");
     }
@@ -717,7 +763,30 @@ function ExerciseScreenContent() {
       localStorage.setItem("rakkyo_user", JSON.stringify(updatedUser));
     } else {
       setMascotEmotion('incorrect');
-      speak("おしい！ちがうみたいだね。となりのラッキョくんにヒントを聞いてみよう！", "incorrect");
+
+      // Fallback: Check local SQLite AI diagnosis cache (P2-4)
+      import('@/lib/offline/db').then(async ({ openUserDb }) => {
+        let customDiagnosis: string | null = null;
+        let staleLabelText: string | null = null;
+        try {
+          const db = await openUserDb(user.id);
+          const { getCachedAiDiagnosis } = await import('@/lib/offline/hint-prefetch');
+          const cachedDiag = getCachedAiDiagnosis(db, currentQuestion.id || currentQuestion.prompt);
+          if (cachedDiag) {
+            customDiagnosis = cachedDiag.diagnosis;
+            staleLabelText = cachedDiag.staleLabel;
+          }
+        } catch (err) {
+          console.error("Failed to read cached AI diagnosis:", err);
+        }
+
+        if (customDiagnosis) {
+          setAiDiagnosis(customDiagnosis);
+          speak(staleLabelText ? `${staleLabelText}。${customDiagnosis}` : customDiagnosis, "incorrect");
+        } else {
+          speak("おしい！ちがうみたいだね。となりのラッキョくんにヒントを聞いてみよう！", "incorrect");
+        }
+      });
     }
   };
 
