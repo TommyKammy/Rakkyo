@@ -6,6 +6,7 @@ import {
   registerServiceWorker,
   requestBackgroundSync,
 } from '@/lib/offline/register-sw';
+import { handleLogout } from '@/lib/offline/user-isolation';
 
 /**
  * Client-side wrapper that initializes the Service Worker
@@ -19,20 +20,80 @@ export function OfflineProviderWrapper() {
     useState<ServiceWorkerRegistration | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
 
-  const handleSyncTrigger = useCallback(() => {
-    // This will be connected to the sync engine when a user is logged in.
-    // For now, it refreshes the pending count indicator.
-    setPendingCount(0);
+  // Sync trigger handler that flushes local SQLite queue using the sync engine
+  const handleSyncTrigger = useCallback(async () => {
+    const token = localStorage.getItem('rakkyo_token');
+    const userStr = localStorage.getItem('rakkyo_user');
+    if (!token || !userStr) return;
+
+    try {
+      const user = JSON.parse(userStr);
+      const userId = user.id;
+      if (!userId) return;
+
+      const { openUserDb } = await import('@/lib/offline/db');
+      const { flushPendingAttempts, getPendingCount } = await import(
+        '@/lib/offline/sync-engine'
+      );
+
+      const db = await openUserDb(userId);
+
+      let deviceId = localStorage.getItem('rakkyo_device_id');
+      if (!deviceId) {
+        deviceId = crypto.randomUUID();
+        localStorage.setItem('rakkyo_device_id', deviceId);
+      }
+
+      // Flush pending attempts to server
+      const res = await flushPendingAttempts(db, token, deviceId);
+      
+      // Update UI pending count state
+      const count = getPendingCount(db);
+      setPendingCount(count);
+
+      // If authoritative stats returned, update in local profile (D-2)
+      if (res.serverStats) {
+        const updatedUser = { ...user, ...res.serverStats };
+        localStorage.setItem('rakkyo_user', JSON.stringify(updatedUser));
+      }
+    } catch (err) {
+      console.error('Failed to trigger offline auto-sync:', err);
+    }
   }, []);
 
-  const handleWipeDb = useCallback((_userId: string) => {
-    // D-8: Remote DB wipe command received via push notification.
-    // The actual wipe logic is handled in user-isolation.ts.
-    console.warn('Remote DB wipe command received');
+  // Remote database wipe trigger via push notification command (D-8)
+  const handleWipeDb = useCallback(async (userId: string) => {
+    console.warn('⚠️ Server-issued remote DB wipe command received! Executing...');
+    try {
+      await handleLogout(userId);
+      // Hard reload to clean up all client stores and redirect to login
+      window.location.reload();
+    } catch (err) {
+      console.error('Failed to execute remote DB wipe:', err);
+    }
   }, []);
 
   useEffect(() => {
-    // Register the Service Worker on mount
+    // 1. Initial pending count load on mount
+    const userStr = localStorage.getItem('rakkyo_user');
+    if (userStr) {
+      try {
+        const user = JSON.parse(userStr);
+        const userId = user.id;
+        if (userId) {
+          import('@/lib/offline/db').then(async ({ openUserDb }) => {
+            const db = await openUserDb(userId);
+            import('@/lib/offline/sync-engine').then(({ getPendingCount }) => {
+              setPendingCount(getPendingCount(db));
+            });
+          });
+        }
+      } catch (e) {
+        console.error('Failed to initialize pending count:', e);
+      }
+    }
+
+    // 2. Register Service Worker with trigger callbacks
     registerServiceWorker(handleSyncTrigger, handleWipeDb).then(
       (reg) => {
         setSwRegistration(reg);

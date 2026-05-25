@@ -4,7 +4,7 @@ import { z } from 'zod';
 export const SyncAttemptSchema = z.object({
   clientEventId: z.string().uuid(),
   userId: z.string().uuid(),
-  questionId: z.string().uuid(),
+  questionId: z.string(),
   isCorrect: z.boolean(),
   hintsUsed: z.number().int().min(0).max(10),
   answerSubmitted: z.string().max(1000),
@@ -58,9 +58,9 @@ export type SchemaVersionResponse = z.infer<typeof SchemaVersionResponseSchema>;
 
 /** Schema for static hints prefetch response */
 export const HintPrefetchResponseSchema = z.object({
-  lessonId: z.string().uuid(),
+  lessonId: z.string(),
   questions: z.array(z.object({
-    questionId: z.string().uuid(),
+    questionId: z.string(),
     hints: z.array(z.string().max(2000)),
   })),
 });
@@ -70,7 +70,7 @@ export type HintPrefetchResponse = z.infer<typeof HintPrefetchResponseSchema>;
 /** Schema for AI cache prefetch response */
 export const AiCachePrefetchResponseSchema = z.object({
   entries: z.array(z.object({
-    questionId: z.string().uuid(),
+    questionId: z.string(),
     diagnosis: z.string().max(5000),
     generatedAt: z.string().datetime(),
   })),

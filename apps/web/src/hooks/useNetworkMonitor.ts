@@ -17,7 +17,9 @@ export function useNetworkMonitor(onReconnect?: () => void) {
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
   const [lastChangedAt, setLastChangedAt] = useState<Date | null>(null);
-  const wasOffline = useRef(false);
+  const wasOffline = useRef(
+    typeof navigator !== 'undefined' ? !navigator.onLine : false
+  );
 
   const handleOnline = useCallback(() => {
     setIsOnline(true);

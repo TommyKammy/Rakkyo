@@ -18,6 +18,7 @@ import {
   SYNC_RATE_LIMIT_MS,
   OFFLINE_SCHEMA_VERSION,
 } from '@rakkyo/shared';
+import { getOrCreateUserKey, encrypt, decrypt } from './crypto';
 
 /** API base URL — mirrors the existing hardcoded pattern in the codebase. */
 const API_BASE = 'http://localhost:4000';
@@ -39,16 +40,21 @@ export interface PendingAttempt {
 /**
  * Enqueue an attempt in the local SQLite offline queue.
  * Generates a `clientEventId` via `crypto.randomUUID()` (D-1).
+ * Encrypts the `answerSubmitted` field using AES-GCM at rest (D-8).
  *
  * @param db - The user's OfflineDb handle
  * @param data - The attempt data (without clientEventId)
  * @returns The generated clientEventId
  */
-export function enqueuePendingAttempt(
+export async function enqueuePendingAttempt(
   db: OfflineDb,
   data: Omit<PendingAttempt, 'clientEventId' | 'syncStatus'>
-): string {
+): Promise<string> {
   const clientEventId = crypto.randomUUID();
+
+  // D-8: Encrypt answerSubmitted at rest before SQLite insertion
+  const key = await getOrCreateUserKey(data.userId);
+  const encryptedAnswer = await encrypt(data.answerSubmitted, key);
 
   db.exec(
     `INSERT INTO offline_attempts
@@ -61,7 +67,7 @@ export function enqueuePendingAttempt(
       data.questionId,
       data.isCorrect ? 1 : 0,
       data.hintsUsed,
-      data.answerSubmitted,
+      encryptedAnswer,
       data.durationSeconds,
       data.errorType,
       data.createdAt,
@@ -78,8 +84,8 @@ export function enqueuePendingAttempt(
  */
 export function getPendingCount(db: OfflineDb): number {
   const row = db.selectOne<{ cnt: number }>(
-    `SELECT COUNT(*) as cnt FROM offline_attempts WHERE syncStatus = ?`,
-    [SYNC_STATUS.PENDING]
+    `SELECT COUNT(*) as cnt FROM offline_attempts WHERE syncStatus = ? OR syncStatus = ?`,
+    [SYNC_STATUS.PENDING, SYNC_STATUS.FAILED]
   );
   return row?.cnt ?? 0;
 }
@@ -104,13 +110,13 @@ export async function flushPendingAttempts(
   serverStats?: { currentXp: number; level: number; streakCount: number };
   jwtExpired?: boolean;
 }> {
-  // Get pending attempts (oldest first)
+  // Get pending attempts (oldest first) - retry FAILED attempts as well
   const pending = db.selectAll<PendingAttempt>(
     `SELECT * FROM offline_attempts
-     WHERE syncStatus = ?
+     WHERE syncStatus = ? OR syncStatus = ?
      ORDER BY createdAt ASC
      LIMIT ?`,
-    [SYNC_STATUS.PENDING, MAX_SYNC_BATCH_SIZE]
+    [SYNC_STATUS.PENDING, SYNC_STATUS.FAILED, MAX_SYNC_BATCH_SIZE]
   );
 
   if (pending.length === 0) {
@@ -129,6 +135,30 @@ export async function flushPendingAttempts(
   await sleep(SYNC_RATE_LIMIT_MS);
 
   try {
+    // D-8: Decrypt the answerSubmitted fields before forming the server API body
+    const attempts = await Promise.all(
+      pending.map(async (p) => {
+        let answer = p.answerSubmitted;
+        try {
+          const key = await getOrCreateUserKey(p.userId);
+          answer = await decrypt(p.answerSubmitted, key);
+        } catch (e) {
+          console.error('Failed to decrypt local attempt answer for sync:', e);
+        }
+        return {
+          clientEventId: p.clientEventId,
+          userId: p.userId,
+          questionId: p.questionId,
+          isCorrect: Boolean(p.isCorrect),
+          hintsUsed: p.hintsUsed,
+          answerSubmitted: answer,
+          durationSeconds: p.durationSeconds,
+          errorType: p.errorType,
+          createdAt: p.createdAt,
+        };
+      })
+    );
+
     const response = await fetch(`${API_BASE}/api/sync/batch`, {
       method: 'POST',
       headers: {
@@ -136,17 +166,7 @@ export async function flushPendingAttempts(
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
-        attempts: pending.map((p) => ({
-          clientEventId: p.clientEventId,
-          userId: p.userId,
-          questionId: p.questionId,
-          isCorrect: Boolean(p.isCorrect),
-          hintsUsed: p.hintsUsed,
-          answerSubmitted: p.answerSubmitted,
-          durationSeconds: p.durationSeconds,
-          errorType: p.errorType,
-          createdAt: p.createdAt,
-        })),
+        attempts,
         schemaVersion: OFFLINE_SCHEMA_VERSION,
         deviceId,
       }),

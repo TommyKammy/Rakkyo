@@ -165,5 +165,26 @@ export class InMemoryCurriculumRepository implements CurriculumRepository {
     }
     return limit ? lessons.slice(0, limit) : lessons;
   }
+
+  async findQuestionsByLessonId(lessonId: string): Promise<any[]> {
+    const dynamicQs = inMemoryState.dynamicQuestions.filter(q => q.lessonId === lessonId);
+    
+    let staticQs: any[] = [];
+    for (const curriculum of allCurriculums) {
+      for (const unit of curriculum.units) {
+        for (const lesson of unit.lessons) {
+          if (lesson.name === lessonId) {
+            staticQs = lesson.questions.map(q => ({
+              id: q.id || q.prompt,
+              hints: q.hints || []
+            }));
+            break;
+          }
+        }
+      }
+    }
+    
+    return [...dynamicQs, ...staticQs];
+  }
 }
 

@@ -662,6 +662,28 @@ function ExerciseScreenContent() {
     // Local fallback evaluation (offline mode)
     const fallbackAttemptId = "attempt_fallback_" + Date.now();
     setLatestAttemptId(fallbackAttemptId);
+
+    // Enqueue the pending attempt to SQLite for later sync (P1-7)
+    import('@/lib/offline/db').then(async ({ openUserDb }) => {
+      try {
+        const db = await openUserDb(user.id);
+        const { enqueuePendingAttempt } = await import('@/lib/offline/sync-engine');
+        const localId = await enqueuePendingAttempt(db, {
+          userId: user.id,
+          questionId: currentQuestion.id || currentQuestion.prompt,
+          isCorrect: isAnsCorrect,
+          hintsUsed,
+          answerSubmitted: submitted,
+          durationSeconds,
+          errorType: isAnsCorrect ? null : "incorrect",
+          createdAt: new Date().toISOString(),
+        });
+        console.log("Successfully enqueued pending offline attempt:", localId);
+      } catch (e) {
+        console.error("Failed to enqueue offline attempt:", e);
+      }
+    });
+
     if (isAnsCorrect) {
       setMascotEmotion('correct');
       speak("正解！すごすぎるよ！ラッキョくんも大喜びだよ！", "correct");

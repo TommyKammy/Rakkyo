@@ -10,9 +10,6 @@
  */
 
 /// <reference lib="webworker" />
-
-declare const self: ServiceWorkerGlobalScope;
-
 /** Cache name for offline assets. */
 const CACHE_NAME = 'rakkyo-offline-v1';
 
@@ -135,7 +132,7 @@ self.addEventListener('message', (event) => {
 /**
  * Notify all open clients to trigger sync.
  */
-async function notifyClientsToSync(): Promise<void> {
+async function notifyClientsToSync() {
   const clients = await self.clients.matchAll({ type: 'window' });
   clients.forEach((client) => {
     client.postMessage({ type: 'TRIGGER_SYNC' });

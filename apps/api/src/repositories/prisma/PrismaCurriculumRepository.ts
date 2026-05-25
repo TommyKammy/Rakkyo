@@ -156,4 +156,29 @@ export class PrismaCurriculumRepository implements CurriculumRepository {
       take: limit
     });
   }
+
+  async findQuestionsByLessonId(lessonId: string): Promise<any[]> {
+    try {
+      const dbQs = await prisma.question.findMany({
+        where: { lessonId }
+      });
+      if (dbQs && dbQs.length > 0) return dbQs;
+    } catch (e) {
+      console.warn('⚠️ Database query failed when finding questions by lesson ID. Falling back to local curriculum search.', e);
+    }
+
+    for (const curriculum of allCurriculums) {
+      for (const unit of curriculum.units) {
+        for (const lesson of unit.lessons) {
+          if (lesson.name === lessonId) {
+            return lesson.questions.map(q => ({
+              id: q.id || q.prompt,
+              hints: q.hints || []
+            }));
+          }
+        }
+      }
+    }
+    return [];
+  }
 }

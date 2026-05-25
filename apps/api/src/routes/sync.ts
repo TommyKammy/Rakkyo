@@ -101,21 +101,13 @@ router.get('/hints/:lessonId', authMiddleware, async (req, res) => {
       return;
     }
 
-    // Use existing findLessons() and filter by ID since
-    // CurriculumRepository has no dedicated findLessonById method.
-    const lessons = await authReq.repos!.curriculum.findLessons();
-    const lesson = lessons.find(
-      (l: { id: string }) => l.id === lessonId
-    );
-    if (!lesson) {
-      res.status(404).json({ error: 'レッスンが見つかりません。' });
+    // Query questions and their hints for the given lesson ID using the repository.
+    const questions = await authReq.repos!.curriculum.findQuestionsByLessonId(lessonId);
+    if (!questions || questions.length === 0) {
+      // Return 404 if no questions are found for this lesson ID
+      res.status(404).json({ error: 'レッスンが見つからないか、問題が登録されていません。' });
       return;
     }
-
-    // Extract questions and hints from the lesson data.
-    // Lessons from the curriculum package include inline questions.
-    const questions: { id: string; hints: string[] }[] =
-      lesson.questions ?? [];
 
     res.json({
       lessonId,

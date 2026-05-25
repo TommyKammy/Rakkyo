@@ -41,28 +41,49 @@ export class PrismaSyncRepository implements SyncRepository {
       };
     }
 
-    const created = await prisma.attempt.create({
-      data: {
-        userId: data.userId,
-        questionId: data.questionId,
-        isCorrect: data.isCorrect,
-        hintsUsed: data.hintsUsed,
-        answerSubmitted: data.answerSubmitted,
-        durationSeconds: data.durationSeconds ?? null,
-        errorType: data.errorType ?? null,
-        clientEventId: data.clientEventId,
-        createdAt: data.createdAt,
-      },
-      select: { id: true, clientEventId: true },
-    });
+    try {
+      const created = await prisma.attempt.create({
+        data: {
+          userId: data.userId,
+          questionId: data.questionId,
+          isCorrect: data.isCorrect,
+          hintsUsed: data.hintsUsed,
+          answerSubmitted: data.answerSubmitted,
+          durationSeconds: data.durationSeconds ?? null,
+          errorType: data.errorType ?? null,
+          clientEventId: data.clientEventId,
+          createdAt: data.createdAt,
+        },
+        select: { id: true, clientEventId: true },
+      });
 
-    return {
-      created: true,
-      attempt: {
-        id: created.id,
-        clientEventId: created.clientEventId ?? data.clientEventId,
-      },
-    };
+      return {
+        created: true,
+        attempt: {
+          id: created.id,
+          clientEventId: created.clientEventId ?? data.clientEventId,
+        },
+      };
+    } catch (error: any) {
+      // P2002 is Prisma's error code for unique key constraint violation.
+      // We also check for 'Unique constraint' in the error message for robustness.
+      if (error && (error.code === 'P2002' || error.message?.includes('Unique constraint'))) {
+        const existingAfterRace = await prisma.attempt.findUnique({
+          where: { clientEventId: data.clientEventId },
+          select: { id: true, clientEventId: true },
+        });
+        if (existingAfterRace) {
+          return {
+            created: false,
+            attempt: {
+              id: existingAfterRace.id,
+              clientEventId: existingAfterRace.clientEventId ?? data.clientEventId,
+            },
+          };
+        }
+      }
+      throw error;
+    }
   }
 
   /** @inheritdoc */
