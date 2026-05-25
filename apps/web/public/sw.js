@@ -119,6 +119,53 @@ self.addEventListener('push', (event) => {
             // No client windows are open — execute direct wipe from SW thread (P1-6)
             const filename = `rakkyo_user_${payload.userId}.db`;
 
+            // P2: Persist a "wipe-required" marker so the next cold start can
+            // also clear localStorage (rakkyo_token / rakkyo_user) and force
+            // a login. Without this, deleting OPFS + IDB key from the SW
+            // would leave the auth token intact in localStorage — the next
+            // app open would silently continue as if logged in until some
+            // unrelated 401 happened. We use a dedicated IDB store rather
+            // than localStorage because localStorage isn't available from a
+            // SW thread.
+            const persistWipeFlag = () => {
+              return new Promise((resolve) => {
+                const req = indexedDB.open('rakkyo-wipe-flags', 1);
+                req.onupgradeneeded = () => {
+                  const upgradeDb = req.result;
+                  if (!upgradeDb.objectStoreNames.contains('flags')) {
+                    upgradeDb.createObjectStore('flags');
+                  }
+                };
+                req.onsuccess = () => {
+                  const db = req.result;
+                  if (!db.objectStoreNames.contains('flags')) {
+                    db.close();
+                    resolve();
+                    return;
+                  }
+                  try {
+                    const tx = db.transaction('flags', 'readwrite');
+                    tx.objectStore('flags').put(
+                      { userId: payload.userId, requestedAt: Date.now() },
+                      `wipe_${payload.userId}`
+                    );
+                    tx.oncomplete = () => {
+                      db.close();
+                      resolve();
+                    };
+                    tx.onerror = () => {
+                      db.close();
+                      resolve();
+                    };
+                  } catch {
+                    db.close();
+                    resolve();
+                  }
+                };
+                req.onerror = () => resolve();
+              });
+            };
+
             // 1. Delete OPFS file
             const deleteOpfs = () => {
               if (navigator.storage && navigator.storage.getDirectory) {
@@ -175,7 +222,7 @@ self.addEventListener('push', (event) => {
               });
             };
 
-            return Promise.all([deleteOpfs(), deleteIdbKey()]);
+            return Promise.all([deleteOpfs(), deleteIdbKey(), persistWipeFlag()]);
           }
         })
       );
@@ -195,7 +242,13 @@ self.addEventListener('message', (event) => {
 });
 
 /**
- * Notify all open clients to trigger sync.
+ * Notify a single client window to trigger sync.
+ *
+ * P2: Picking one client (preferring the focused / visible tab, falling
+ * back to the first) prevents multi-tab sessions from launching concurrent
+ * `flushPendingAttempts()` runs against the same local queue. Each
+ * concurrent flush would reset `SYNCING` rows back to `PENDING` at startup
+ * and reupload them, producing avoidable duplicate traffic.
  */
 async function notifyClientsToSync() {
   const clients = await self.clients.matchAll({ type: 'window' });
@@ -203,7 +256,11 @@ async function notifyClientsToSync() {
     // Throw error to tell browser that sync failed and should be retried later when a window is active (P1-8)
     throw new Error('No active client windows available for sync');
   }
-  clients.forEach((client) => {
-    client.postMessage({ type: 'TRIGGER_SYNC' });
-  });
+  // Prefer a focused or visible tab so the user can see status; otherwise
+  // any one client is fine.
+  const preferred =
+    clients.find((c) => c.focused) ||
+    clients.find((c) => c.visibilityState === 'visible') ||
+    clients[0];
+  preferred.postMessage({ type: 'TRIGGER_SYNC' });
 }

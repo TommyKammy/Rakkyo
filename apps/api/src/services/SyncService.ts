@@ -1,10 +1,20 @@
 import { SyncRepository } from '../repositories/SyncRepository';
 import { CurriculumRepository } from '../repositories/CurriculumRepository';
+import { AttemptRepository } from '../repositories/AttemptRepository';
 import {
   OFFLINE_SYNC_FUTURE_SKEW_MS,
   OFFLINE_SYNC_MAX_AGE_MS,
   SYNC_RATE_LIMIT_MS,
 } from '@rakkyo/shared';
+
+/**
+ * Upper bound on `hintsUsed` accepted from offline payloads.
+ *
+ * The curriculum exposes 3 progressive hint stages, so any value beyond 3 is
+ * a forged payload. Clamping here prevents a malicious offline client from
+ * inflating grit-quest / level progression by sending arbitrary hint counts.
+ */
+const MAX_HINTS_USED = 3;
 
 /** Individual attempt sync result for the batch response. */
 interface AttemptSyncResult {
@@ -50,7 +60,8 @@ interface SyncAttemptInput {
 export class SyncService {
   constructor(
     private syncRepo: SyncRepository,
-    private curriculumRepo: CurriculumRepository
+    private curriculumRepo: CurriculumRepository,
+    private attemptRepo: AttemptRepository
   ) {}
 
   /**
@@ -115,17 +126,57 @@ export class SyncService {
           isCorrect = attempt.isCorrect;
         }
 
+        // P1: Reject client-controlled review / hint fields.
+        // These directly drive XP / quest bonus computation in
+        // recalculateUserStats, so untrusted offline payloads must be
+        // sanitized before persistence.
+        //
+        // - hintsUsed: clamp to the curriculum's stage cap (0..3). A forged
+        //   higher value would inflate grit-quest XP via the per-day quest
+        //   trigger `isCorrect && hintsUsed >= 1`.
+        // - isReview: derived server-side. A "review" attempt means the
+        //   user is re-doing a question they previously got correct, so
+        //   look for a prior correct attempt with `createdAt` strictly
+        //   before this one. If none exists, isReview is forced to false
+        //   regardless of what the client claims — preventing forged
+        //   payloads from claiming the 25-XP review bonus.
+        const sanitizedHintsUsed = Math.max(
+          0,
+          Math.min(MAX_HINTS_USED, Math.floor(Number(attempt.hintsUsed) || 0))
+        );
+
+        let derivedIsReview = false;
+        try {
+          const priorAttempts = await this.attemptRepo.findAttemptsByQuestion(
+            userId,
+            attempt.questionId
+          );
+          derivedIsReview = priorAttempts.some(
+            (a: any) =>
+              a.isCorrect === true &&
+              new Date(a.createdAt).getTime() < attemptDate.getTime()
+          );
+        } catch (err) {
+          console.error(
+            `Failed to derive isReview server-side for question ${attempt.questionId}:`,
+            err
+          );
+          // Fail closed: when uncertain, treat as a normal first attempt
+          // rather than awarding the review bonus.
+          derivedIsReview = false;
+        }
+
         const { created, attempt: savedAttempt } =
           await this.syncRepo.createAttemptIdempotent({
             clientEventId: attempt.clientEventId,
             userId,
             questionId: attempt.questionId,
             isCorrect,
-            hintsUsed: attempt.hintsUsed,
+            hintsUsed: sanitizedHintsUsed,
             answerSubmitted: attempt.answerSubmitted,
             durationSeconds: attempt.durationSeconds ?? null,
             errorType: attempt.errorType ?? null,
-            isReview: attempt.isReview ?? false,
+            isReview: derivedIsReview,
             createdAt: attemptDate,
           });
 

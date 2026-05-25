@@ -63,6 +63,79 @@ export async function handleLogout(userId: string): Promise<void> {
 }
 
 /**
+ * P2: Drain any pending remote-wipe markers persisted by the Service Worker
+ * while no client window was open. The SW push handler writes a flag into
+ * `rakkyo-wipe-flags` and finishes the wipe of OPFS / IDB key on its own,
+ * but it can't touch `localStorage` from the SW thread. This helper finishes
+ * the job at cold start so an attacker can't recover a forgotten/stolen
+ * device by just reopening the PWA.
+ *
+ * @returns The userId whose wipe was pending (if any), so callers can react.
+ */
+export async function drainPendingRemoteWipe(): Promise<string | null> {
+  if (typeof indexedDB === 'undefined') return null;
+
+  return new Promise((resolve) => {
+    const req = indexedDB.open('rakkyo-wipe-flags', 1);
+    req.onupgradeneeded = () => {
+      const upgradeDb = req.result;
+      if (!upgradeDb.objectStoreNames.contains('flags')) {
+        upgradeDb.createObjectStore('flags');
+      }
+    };
+    req.onsuccess = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('flags')) {
+        db.close();
+        resolve(null);
+        return;
+      }
+      try {
+        const tx = db.transaction('flags', 'readwrite');
+        const store = tx.objectStore('flags');
+        const getAllKeysReq = store.getAllKeys();
+        getAllKeysReq.onsuccess = () => {
+          const keys = getAllKeysReq.result as string[];
+          const wipeKey = keys.find((k) => k.startsWith('wipe_'));
+          if (!wipeKey) {
+            db.close();
+            resolve(null);
+            return;
+          }
+          const userId = wipeKey.slice('wipe_'.length);
+          // Forcibly clear auth/session state so the next page render
+          // routes the user back to login.
+          try {
+            localStorage.removeItem(MOUNTED_USER_KEY);
+            localStorage.removeItem('rakkyo_token');
+            localStorage.removeItem('rakkyo_user');
+          } catch {
+            // localStorage may be unavailable in some private modes; ignore
+          }
+          store.delete(wipeKey);
+          tx.oncomplete = () => {
+            db.close();
+            resolve(userId);
+          };
+          tx.onerror = () => {
+            db.close();
+            resolve(userId);
+          };
+        };
+        getAllKeysReq.onerror = () => {
+          db.close();
+          resolve(null);
+        };
+      } catch {
+        db.close();
+        resolve(null);
+      }
+    };
+    req.onerror = () => resolve(null);
+  });
+}
+
+/**
  * Handle account switch with safety check (D-4).
  *
  * If the new user is different from the previously mounted user,

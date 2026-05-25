@@ -6,7 +6,7 @@ import {
   registerServiceWorker,
   requestBackgroundSync,
 } from '@/lib/offline/register-sw';
-import { handleLogout } from '@/lib/offline/user-isolation';
+import { handleLogout, drainPendingRemoteWipe } from '@/lib/offline/user-isolation';
 
 /**
  * Client-side wrapper that initializes the Service Worker
@@ -100,7 +100,21 @@ export function OfflineProviderWrapper() {
   }, []);
 
   useEffect(() => {
-    // 1. Initial pending count load on mount
+    // P2: Drain any pending remote-wipe marker persisted by the SW while no
+    // window was open. If one is found, localStorage tokens have already
+    // been cleared inside drainPendingRemoteWipe — reload so the rest of the
+    // app re-evaluates auth state and routes the user back to login.
+    drainPendingRemoteWipe().then((wipedUserId) => {
+      if (wipedUserId) {
+        console.warn('⚠️ Remote wipe was pending from a previous push event. Reloading...');
+        window.location.reload();
+      }
+    });
+
+    // 1. Initial pending count load on mount + auto-flush if we're already
+    //    online (P2). Without auto-flush, attempts queued in an earlier
+    //    offline session would sit in PENDING until a new enqueue/reconnect
+    //    event happened.
     const refreshCount = () => {
       const userStr = localStorage.getItem('rakkyo_user');
       if (userStr) {
@@ -111,7 +125,11 @@ export function OfflineProviderWrapper() {
             import('@/lib/offline/db').then(async ({ openUserDb }) => {
               const db = await openUserDb(userId);
               import('@/lib/offline/sync-engine').then(({ getPendingCount }) => {
-                setPendingCount(getPendingCount(db));
+                const count = getPendingCount(db);
+                setPendingCount(count);
+                if (count > 0 && navigator.onLine) {
+                  handleSyncTrigger();
+                }
               });
             });
           }

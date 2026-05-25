@@ -1,6 +1,7 @@
 import { SyncService } from './SyncService';
 import { InMemorySyncRepository } from '../repositories/inmemory/InMemorySyncRepository';
 import { InMemoryCurriculumRepository } from '../repositories/inmemory/InMemoryCurriculumRepository';
+import { InMemoryAttemptRepository } from '../repositories/inmemory/InMemoryAttemptRepository';
 import { inMemoryState } from '../repositories/inmemory/state';
 import { resetSyncLogs } from '../repositories/inmemory/InMemorySyncRepository';
 import crypto from 'crypto';
@@ -9,13 +10,15 @@ describe('SyncService', () => {
   let service: SyncService;
   let repo: InMemorySyncRepository;
   let curriculumRepo: InMemoryCurriculumRepository;
+  let attemptRepo: InMemoryAttemptRepository;
 
   beforeEach(() => {
     inMemoryState.reset();
     resetSyncLogs();
     repo = new InMemorySyncRepository();
     curriculumRepo = new InMemoryCurriculumRepository();
-    service = new SyncService(repo, curriculumRepo);
+    attemptRepo = new InMemoryAttemptRepository();
+    service = new SyncService(repo, curriculumRepo, attemptRepo);
   });
 
   // D-2: CRDT merge order independence — random insertion order → same XP
@@ -174,6 +177,109 @@ describe('SyncService', () => {
     );
 
     expect(result.results[0].status).toBe('rejected');
+  });
+
+  // P1 regression: client-supplied isReview/hintsUsed must be ignored / clamped server-side.
+  it('derives isReview server-side instead of trusting the client (P1)', async () => {
+    const userId = 'test-student-id';
+    const questionId = 'q-review-test';
+
+    // Pre-seed a prior correct attempt with an explicitly older timestamp so
+    // the server-side isReview derivation (strict <) can detect it.
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    inMemoryState.attempts.push({
+      id: 'prior-attempt-1',
+      userId,
+      questionId,
+      isCorrect: true,
+      hintsUsed: 0,
+      answerSubmitted: 'right',
+      durationSeconds: 10,
+      errorType: null,
+      aiDiagnosis: null,
+      createdAt: oneHourAgo,
+      isReview: false,
+    });
+
+    // First scenario: a "fresh" question with no prior history — even if the
+    // client tries to claim isReview=true, the server must force it to false.
+    const eventIdFresh = crypto.randomUUID();
+    const eventIdReview = crypto.randomUUID();
+    const nowIso = new Date().toISOString();
+
+    const result = await service.processBatch(
+      userId,
+      [
+        {
+          clientEventId: eventIdFresh,
+          userId,
+          questionId: 'q-fresh-no-prior',
+          isCorrect: true,
+          hintsUsed: 0,
+          answerSubmitted: 'whatever',
+          isReview: true, // forged
+          createdAt: nowIso,
+        },
+        {
+          clientEventId: eventIdReview,
+          userId,
+          questionId,
+          isCorrect: true,
+          hintsUsed: 0,
+          answerSubmitted: 'right',
+          isReview: false, // client doesn't admit it, but server sees prior correct attempt
+          createdAt: nowIso,
+        },
+      ],
+      'dev-isreview'
+    );
+
+    expect(result.results.every((r) => r.status === 'created')).toBe(true);
+
+    // Inspect what was actually persisted in the in-memory store.
+    const persisted = inMemoryState.attempts.filter(
+      (a) => a.userId === userId
+    );
+    const fresh = persisted.find((a) => a.questionId === 'q-fresh-no-prior');
+    const review = persisted.find(
+      (a) =>
+        a.questionId === questionId &&
+        a.id !== persisted.find((p) => p.questionId === questionId && p.hintsUsed === 0)?.id
+    );
+
+    expect(fresh?.isReview).toBe(false); // client forgery rejected
+    // Find the newly-synced review attempt — there will be two for `questionId`:
+    // the pre-seeded one (no clientEventId in inMemoryState) and the new one.
+    const newlySyncedReview = persisted
+      .filter((a) => a.questionId === questionId)
+      .find((a) => a.clientEventId === eventIdReview);
+    expect(newlySyncedReview?.isReview).toBe(true); // server-derived
+  });
+
+  it('clamps client-supplied hintsUsed to the curriculum stage cap (P1)', async () => {
+    const userId = 'test-student-id';
+    const eventId = crypto.randomUUID();
+
+    await service.processBatch(
+      userId,
+      [
+        {
+          clientEventId: eventId,
+          userId,
+          questionId: 'q-hints-clamp',
+          isCorrect: true,
+          hintsUsed: 999, // forged
+          answerSubmitted: 'whatever',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      'dev-hints'
+    );
+
+    const persisted = inMemoryState.attempts.find(
+      (a) => a.clientEventId === eventId
+    );
+    expect(persisted?.hintsUsed).toBe(3);
   });
 
   // Sync log is recorded for each batch
