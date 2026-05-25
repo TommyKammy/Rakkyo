@@ -1,5 +1,6 @@
 import { SyncService } from './SyncService';
 import { InMemorySyncRepository } from '../repositories/inmemory/InMemorySyncRepository';
+import { InMemoryCurriculumRepository } from '../repositories/inmemory/InMemoryCurriculumRepository';
 import { inMemoryState } from '../repositories/inmemory/state';
 import { resetSyncLogs } from '../repositories/inmemory/InMemorySyncRepository';
 import crypto from 'crypto';
@@ -7,12 +8,14 @@ import crypto from 'crypto';
 describe('SyncService', () => {
   let service: SyncService;
   let repo: InMemorySyncRepository;
+  let curriculumRepo: InMemoryCurriculumRepository;
 
   beforeEach(() => {
     inMemoryState.reset();
     resetSyncLogs();
     repo = new InMemorySyncRepository();
-    service = new SyncService(repo);
+    curriculumRepo = new InMemoryCurriculumRepository();
+    service = new SyncService(repo, curriculumRepo);
   });
 
   // D-2: CRDT merge order independence — random insertion order → same XP

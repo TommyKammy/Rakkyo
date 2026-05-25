@@ -35,6 +35,7 @@ export interface PendingAttempt {
   errorType: string | null;
   createdAt: string;
   syncStatus: string;
+  isReview: boolean | null;
 }
 
 /**
@@ -59,8 +60,8 @@ export async function enqueuePendingAttempt(
   db.exec(
     `INSERT INTO offline_attempts
        (clientEventId, userId, questionId, isCorrect, hintsUsed,
-        answerSubmitted, durationSeconds, errorType, createdAt, syncStatus)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        answerSubmitted, durationSeconds, errorType, createdAt, syncStatus, isReview)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       clientEventId,
       data.userId,
@@ -72,6 +73,7 @@ export async function enqueuePendingAttempt(
       data.errorType,
       data.createdAt,
       SYNC_STATUS.PENDING,
+      data.isReview ? 1 : 0,
     ]
   );
 
@@ -178,6 +180,7 @@ export async function flushPendingAttempts(
         answerSubmitted: answer,
         durationSeconds: p.durationSeconds,
         errorType: p.errorType,
+        isReview: Boolean(p.isReview),
         createdAt: p.createdAt,
       };
 

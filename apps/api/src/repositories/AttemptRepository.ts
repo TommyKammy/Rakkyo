@@ -10,6 +10,7 @@ export interface AttemptRepository {
     durationSeconds?: number | null;
     errorType?: string | null;
     aiDiagnosis?: string | null;
+    isReview?: boolean | null;
   }): Promise<Attempt>;
   findAttemptsByUser(userId: string, limit?: number): Promise<any[]>;
   findAttemptsByQuestion(userId: string, questionId: string): Promise<Attempt[]>;

@@ -1,4 +1,5 @@
 import { SyncRepository } from '../repositories/SyncRepository';
+import { CurriculumRepository } from '../repositories/CurriculumRepository';
 import { ABUSE_WINDOW_MS, SYNC_RATE_LIMIT_MS } from '@rakkyo/shared';
 
 /** Individual attempt sync result for the batch response. */
@@ -30,6 +31,7 @@ interface SyncAttemptInput {
   answerSubmitted: string;
   durationSeconds?: number | null;
   errorType?: string | null;
+  isReview?: boolean | null;
   createdAt: string;
 }
 
@@ -42,7 +44,10 @@ interface SyncAttemptInput {
  * Attempt history to guarantee order-independent deterministic results.
  */
 export class SyncService {
-  constructor(private syncRepo: SyncRepository) {}
+  constructor(
+    private syncRepo: SyncRepository,
+    private curriculumRepo: CurriculumRepository
+  ) {}
 
   /**
    * Process a batch of offline attempts.
@@ -70,23 +75,46 @@ export class SyncService {
         isFirst = false;
 
         const attemptDate = new Date(attempt.createdAt);
+        const timeDiff = now.getTime() - attemptDate.getTime();
 
-        // D-7: Offline attempts older than 1h are outside the abuse window.
-        // This prevents burst false-positives when a batch of old attempts
-        // arrives at once after reconnection.
-        const _isWithinAbuseWindow =
-          now.getTime() - attemptDate.getTime() < ABUSE_WINDOW_MS;
+        // P1: Reject attempts with forged timestamps (e.g. in the future or older than the 1h abuse window)
+        // Allow up to 5 minutes (300,000 ms) in the future for potential clock skew.
+        if (timeDiff < -300000 || timeDiff > ABUSE_WINDOW_MS) {
+          results.push({
+            clientEventId: attempt.clientEventId,
+            status: 'rejected',
+            reason: '送信日時のタイムスタンプが時間枠外（未来または1時間以上前）です。',
+          });
+          continue;
+        }
+
+        // P1: Server-Side Correctness Verification.
+        // Recompute correctness server-side by checking submitted answers against curriculum answers before persistence.
+        let isCorrect = attempt.isCorrect;
+        try {
+          const question = await this.curriculumRepo.findQuestionById(attempt.questionId);
+          if (question) {
+            isCorrect = question.answers.some(
+              (ans: string) => ans.toLowerCase().trim() === attempt.answerSubmitted.toLowerCase().trim()
+            );
+          }
+        } catch (err) {
+          console.error(`Failed to verify correctness for question ${attempt.questionId} server-side:`, err);
+          // Keep original client-reported isCorrect if database check errors out
+          isCorrect = attempt.isCorrect;
+        }
 
         const { created, attempt: savedAttempt } =
           await this.syncRepo.createAttemptIdempotent({
             clientEventId: attempt.clientEventId,
             userId,
             questionId: attempt.questionId,
-            isCorrect: attempt.isCorrect,
+            isCorrect,
             hintsUsed: attempt.hintsUsed,
             answerSubmitted: attempt.answerSubmitted,
             durationSeconds: attempt.durationSeconds ?? null,
             errorType: attempt.errorType ?? null,
+            isReview: attempt.isReview ?? false,
             createdAt: attemptDate,
           });
 
@@ -95,7 +123,8 @@ export class SyncService {
           status: created ? 'created' : 'duplicate',
           serverId: savedAttempt.id,
         });
-      } catch {
+      } catch (error) {
+        console.error('Error processing offline attempt:', error);
         results.push({
           clientEventId: attempt.clientEventId,
           status: 'rejected',

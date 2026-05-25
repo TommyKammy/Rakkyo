@@ -722,6 +722,7 @@ function ExerciseScreenContent() {
           answerSubmitted: submitted,
           durationSeconds,
           errorType: isAnsCorrect ? null : "incorrect",
+          isReview: isReview,
           createdAt: new Date().toISOString(),
         });
         console.log("Successfully enqueued pending offline attempt:", localId);

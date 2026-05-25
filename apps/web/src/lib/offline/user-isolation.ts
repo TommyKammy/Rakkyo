@@ -56,8 +56,10 @@ export async function handleLogout(userId: string): Promise<void> {
   // 2. Delete the encryption key (D-8)
   await deleteKey(`enc_${userId}`);
 
-  // 3. Clear the mounted user marker
+  // 3. Clear the mounted user marker and session storage (P1)
   localStorage.removeItem(MOUNTED_USER_KEY);
+  localStorage.removeItem('rakkyo_token');
+  localStorage.removeItem('rakkyo_user');
 }
 
 /**

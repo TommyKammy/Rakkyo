@@ -47,6 +47,7 @@ export class InMemorySyncRepository implements SyncRepository {
     answerSubmitted: string;
     durationSeconds?: number | null;
     errorType?: string | null;
+    isReview?: boolean | null;
     createdAt: Date;
   }): Promise<{ created: boolean; attempt: { id: string; clientEventId: string } }> {
     // Check for duplicate clientEventId (D-1)
@@ -76,6 +77,7 @@ export class InMemorySyncRepository implements SyncRepository {
       errorType: data.errorType ?? null,
       createdAt: data.createdAt.toISOString(),
       clientEventId: data.clientEventId,
+      isReview: data.isReview ?? false,
     };
 
     inMemoryState.attempts.push(attempt);
@@ -144,7 +146,7 @@ export class InMemorySyncRepository implements SyncRepository {
     let currentLevel = 1;
     let currentStreak = 0;
     let lastActiveStr: string | null = null;
-    const history: any[] = [];
+    const questionMissedOrHinted = new Map<string, boolean>();
 
     for (const dayStr of sortedDays) {
       // 1. Update streak day-by-day
@@ -175,11 +177,10 @@ export class InMemorySyncRepository implements SyncRepository {
         attemptsCountToday++;
         const isCorrect = a.isCorrect;
         
-        // Check Grit retry bonus
-        const pastForQ = history.filter(h => h.questionId === a.questionId);
-        const isGritBonus = isCorrect && pastForQ.some(p => !p.isCorrect || p.hintsUsed >= 2);
+        // O(1) Check Grit retry bonus
+        const isGritBonus = isCorrect && !!questionMissedOrHinted.get(a.questionId);
         
-        const xpAwarded = isCorrect ? (isGritBonus ? 30 : 10) : 0;
+        const xpAwarded = isCorrect ? (isGritBonus ? 30 : (a.isReview ? 25 : 10)) : 0;
         let questXp = 0;
 
         if (!adventureCompleted && attemptsCountToday >= 3) {
@@ -203,7 +204,10 @@ export class InMemorySyncRepository implements SyncRepository {
           xpNeeded = currentLevel * 100;
         }
 
-        history.push(a);
+        // Update tracking map for future attempts on this question
+        if (!isCorrect || a.hintsUsed >= 2) {
+          questionMissedOrHinted.set(a.questionId, true);
+        }
       }
     }
 
@@ -213,7 +217,12 @@ export class InMemorySyncRepository implements SyncRepository {
       user.currentXp = currentXp;
       user.level = currentLevel;
       user.streakCount = currentStreak;
+      if (lastActiveStr) {
+        user.lastActiveDate = new Date(lastActiveStr).toISOString();
+      }
     }
+
+    return { currentXp, level: currentLevel, streakCount: currentStreak };
 
     return { currentXp, level: currentLevel, streakCount: currentStreak };
   }

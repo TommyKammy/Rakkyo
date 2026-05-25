@@ -12,9 +12,20 @@ export class PrismaAttemptRepository implements AttemptRepository {
     durationSeconds?: number | null;
     errorType?: string | null;
     aiDiagnosis?: string | null;
+    isReview?: boolean | null;
   }): Promise<Attempt> {
     return prisma.attempt.create({
-      data
+      data: {
+        userId: data.userId,
+        questionId: data.questionId,
+        isCorrect: data.isCorrect,
+        hintsUsed: data.hintsUsed,
+        answerSubmitted: data.answerSubmitted,
+        durationSeconds: data.durationSeconds ?? null,
+        errorType: data.errorType ?? null,
+        aiDiagnosis: data.aiDiagnosis ?? null,
+        isReview: data.isReview ?? false,
+      }
     });
   }
 

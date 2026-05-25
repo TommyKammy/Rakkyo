@@ -234,6 +234,7 @@ model Attempt {
   createdAt       DateTime @default(now())
   errorType       String?
   aiDiagnosis     String?
+  isReview        Boolean  @default(false)
 
   // Phase-16-D: Idempotency key for offline sync dedup (D-1)
   clientEventId   String?  @unique

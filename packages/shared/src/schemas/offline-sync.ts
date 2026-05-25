@@ -10,6 +10,7 @@ export const SyncAttemptSchema = z.object({
   answerSubmitted: z.string().max(5000),
   durationSeconds: z.number().int().min(0).max(7200).nullable().optional(),
   errorType: z.string().max(100).nullable().optional(),
+  isReview: z.boolean().nullable().optional(),
   createdAt: z.string().datetime(),
 });
 

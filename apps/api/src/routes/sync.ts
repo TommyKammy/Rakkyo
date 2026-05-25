@@ -50,7 +50,7 @@ router.post('/batch', authMiddleware, async (req, res) => {
       return;
     }
 
-    const syncService = new SyncService(authReq.repos!.sync);
+    const syncService = new SyncService(authReq.repos!.sync, authReq.repos!.curriculum);
     const result = await syncService.processBatch(
       userId,
       attempts,

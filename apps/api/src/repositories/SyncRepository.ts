@@ -19,6 +19,7 @@ export interface SyncRepository {
     answerSubmitted: string;
     durationSeconds?: number | null;
     errorType?: string | null;
+    isReview?: boolean | null;
     createdAt: Date;
   }): Promise<{ created: boolean; attempt: { id: string; clientEventId: string } }>;
 

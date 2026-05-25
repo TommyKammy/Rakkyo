@@ -23,6 +23,7 @@ export class PrismaSyncRepository implements SyncRepository {
     answerSubmitted: string;
     durationSeconds?: number | null;
     errorType?: string | null;
+    isReview?: boolean | null;
     createdAt: Date;
   }): Promise<{ created: boolean; attempt: { id: string; clientEventId: string } }> {
     // Check if duplicate already exists (D-1)
@@ -52,6 +53,7 @@ export class PrismaSyncRepository implements SyncRepository {
           durationSeconds: data.durationSeconds ?? null,
           errorType: data.errorType ?? null,
           clientEventId: data.clientEventId,
+          isReview: data.isReview ?? false,
           createdAt: data.createdAt,
         },
         select: { id: true, clientEventId: true },
@@ -118,7 +120,7 @@ export class PrismaSyncRepository implements SyncRepository {
   }> {
     const attempts = await prisma.attempt.findMany({
       where: { userId },
-      select: { isCorrect: true, hintsUsed: true, questionId: true, createdAt: true },
+      select: { isCorrect: true, hintsUsed: true, questionId: true, createdAt: true, isReview: true },
       orderBy: { createdAt: 'asc' },
     });
 
@@ -149,7 +151,7 @@ export class PrismaSyncRepository implements SyncRepository {
     let currentLevel = 1;
     let currentStreak = 0;
     let lastActiveStr: string | null = null;
-    const history: any[] = [];
+    const questionMissedOrHinted = new Map<string, boolean>();
 
     for (const dayStr of sortedDays) {
       // 1. Update streak day-by-day
@@ -180,11 +182,10 @@ export class PrismaSyncRepository implements SyncRepository {
         attemptsCountToday++;
         const isCorrect = a.isCorrect;
         
-        // Check Grit retry bonus
-        const pastForQ = history.filter(h => h.questionId === a.questionId);
-        const isGritBonus = isCorrect && pastForQ.some(p => !p.isCorrect || p.hintsUsed >= 2);
+        // O(1) Check Grit retry bonus
+        const isGritBonus = isCorrect && !!questionMissedOrHinted.get(a.questionId);
         
-        const xpAwarded = isCorrect ? (isGritBonus ? 30 : 10) : 0;
+        const xpAwarded = isCorrect ? (isGritBonus ? 30 : (a.isReview ? 25 : 10)) : 0;
         let questXp = 0;
 
         if (!adventureCompleted && attemptsCountToday >= 3) {
@@ -208,14 +209,26 @@ export class PrismaSyncRepository implements SyncRepository {
           xpNeeded = currentLevel * 100;
         }
 
-        history.push(a);
+        // Update tracking map for future attempts on this question
+        if (!isCorrect || a.hintsUsed >= 2) {
+          questionMissedOrHinted.set(a.questionId, true);
+        }
       }
     }
 
     // Update user record atomically
+    const updateData: any = {
+      currentXp,
+      level: currentLevel,
+      streakCount: currentStreak,
+    };
+    if (lastActiveStr) {
+      updateData.lastActiveDate = new Date(lastActiveStr);
+    }
+
     await prisma.user.update({
       where: { id: userId },
-      data: { currentXp, level: currentLevel, streakCount: currentStreak },
+      data: updateData,
     });
 
     return { currentXp, level: currentLevel, streakCount: currentStreak };
