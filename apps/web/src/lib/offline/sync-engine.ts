@@ -158,8 +158,15 @@ export async function flushPendingAttempts(
         await sleep(SYNC_RATE_LIMIT_MS);
       }
 
-      // D-8: Decrypt the answerSubmitted field
-      let answer = p.answerSubmitted;
+      // D-8: Decrypt the answerSubmitted field.
+      // P1: If decryption fails (e.g. IndexedDB key evicted while OPFS rows
+      // remain), do NOT upload a placeholder string. The server recomputes
+      // correctness against canonical answers, so a placeholder would mark
+      // legitimately-correct work as incorrect and lock that corruption into
+      // the Attempt history while dropping the local row from the retry
+      // queue. Instead, keep the ciphertext intact and mark the row FAILED
+      // so it's never advanced to SYNCED with fabricated content.
+      let answer: string;
       try {
         const key = await getUserKey(p.userId);
         if (!key) {
@@ -168,7 +175,12 @@ export async function flushPendingAttempts(
         answer = await decrypt(p.answerSubmitted, key);
       } catch (e) {
         console.error('Failed to decrypt local attempt answer for sync:', e);
-        answer = 'WIPED_OR_CORRUPT_DATA';
+        db.exec(
+          `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
+          [SYNC_STATUS.FAILED, p.clientEventId]
+        );
+        totalFailed++;
+        continue;
       }
 
       const attemptInput = {
