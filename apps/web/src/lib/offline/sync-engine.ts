@@ -120,12 +120,18 @@ export async function flushPendingAttempts(
   let totalDuplicates = 0;
   let totalFailed = 0;
   let serverStats: { currentXp: number; level: number; streakCount: number } | undefined;
+  const processedIds = new Set<string>();
 
   while (true) {
+    // Exclude already processed attempts in this invocation to prevent infinite loops on unsyncable rows (P1-10)
+    const excludedSql = processedIds.size > 0
+      ? `AND clientEventId NOT IN (${Array.from(processedIds).map(id => `'${id}'`).join(',')})`
+      : '';
+
     // Get pending attempts (oldest first) - retry FAILED attempts as well
     const pending = db.selectAll<PendingAttempt>(
       `SELECT * FROM offline_attempts
-       WHERE syncStatus = ? OR syncStatus = ?
+       WHERE (syncStatus = ? OR syncStatus = ?) ${excludedSql}
        ORDER BY createdAt ASC
        LIMIT ?`,
       [SYNC_STATUS.PENDING, SYNC_STATUS.FAILED, MAX_SYNC_BATCH_SIZE]
@@ -137,6 +143,7 @@ export async function flushPendingAttempts(
 
     for (let i = 0; i < pending.length; i++) {
       const p = pending[i];
+      processedIds.add(p.clientEventId);
 
       // Mark current attempt as SYNCING
       db.exec(

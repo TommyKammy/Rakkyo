@@ -64,10 +64,10 @@ export function OfflineProviderWrapper() {
       const count = getPendingCount(db);
       setPendingCount(count);
 
-      // Handle expired JWT token — wipe localDB credentials and reload page (P2-4)
+      // Handle expired JWT token — clear token and reload to prompt login without wiping offline DB (P1-9)
       if (res.jwtExpired) {
         console.warn('⚠️ JWT has expired during offline sync flush. Redirecting to login...');
-        await handleLogout(userId);
+        localStorage.removeItem('rakkyo_token');
         window.location.reload();
         return;
       }
