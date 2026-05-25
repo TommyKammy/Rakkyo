@@ -5,6 +5,7 @@ import { PrismaAttemptRepository } from './PrismaAttemptRepository';
 import { PrismaCollaborativeRepository } from './PrismaCollaborativeRepository';
 import { PrismaAvatarRepository } from './PrismaAvatarRepository';
 import { PrismaSpeechRepository } from './PrismaSpeechRepository';
+import { PrismaSyncRepository } from './PrismaSyncRepository';
 
 export const prismaRepos: RepositoryContainer = {
   users: new PrismaUserRepository(),
@@ -12,6 +13,6 @@ export const prismaRepos: RepositoryContainer = {
   attempts: new PrismaAttemptRepository(),
   collaborative: new PrismaCollaborativeRepository(),
   avatars: new PrismaAvatarRepository(),
-  speech: new PrismaSpeechRepository()
+  speech: new PrismaSpeechRepository(),
+  sync: new PrismaSyncRepository(),
 };
-

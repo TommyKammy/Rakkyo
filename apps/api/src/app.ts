@@ -12,6 +12,7 @@ import usersRouter from './routes/users';
 import ttsRouter from './routes/tts';
 import avatarsRouter from './routes/avatars';
 import speechRouter from './routes/speech';
+import syncRouter from './routes/sync';
 
 const app = express();
 
@@ -33,6 +34,7 @@ app.use('/api/users', usersRouter);
 app.use('/api/tts', ttsRouter);
 app.use('/api/avatars', avatarsRouter);
 app.use('/api/speech', speechRouter);
+app.use('/api/sync', syncRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({

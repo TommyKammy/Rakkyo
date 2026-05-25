@@ -73,6 +73,8 @@ export interface AttemptMock {
   createdAt: string;
   errorType?: string | null;
   aiDiagnosis?: string | null;
+  // Phase-16-D: Idempotency key for offline sync dedup (D-1)
+  clientEventId?: string | null;
 }
 
 export interface ParentMessageMock {
