@@ -19,8 +19,30 @@ export const AI_CACHE_STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 /** Number of questions to prefetch AI diagnosis for (D-5 / P16D-003). */
 export const HINT_PREFETCH_COUNT = 30;
 
-/** Abuse window in milliseconds — server treats offline attempts older than this as outside abuse window (D-7). */
+/**
+ * @deprecated Do NOT use as the offline-sync acceptance window.
+ *
+ * This constant was previously used by `/api/sync/batch` to reject attempts
+ * older than 1 hour, which incorrectly dropped legitimate offline sessions
+ * (commute / multi-day disconnection). Use {@link OFFLINE_SYNC_MAX_AGE_MS}
+ * instead for sync acceptance, and keep this only for short-window abuse
+ * heuristics that are explicitly meant to fire within an hour.
+ */
 export const ABUSE_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * Maximum acceptable age (ms) for an offline attempt's `createdAt`
+ * when reconciling via `/api/sync/batch` (P1: offline-first preservation).
+ *
+ * Offline sessions must be allowed to outlive the abuse window — children
+ * frequently study during multi-day disconnections (commute / trips / poor WiFi).
+ * Setting this to 30 days keeps the window finite (cap forged-old timestamps)
+ * while supporting the realistic offline use cases the PWA was built for.
+ */
+export const OFFLINE_SYNC_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Maximum future-clock skew (ms) accepted for offline attempt `createdAt`. */
+export const OFFLINE_SYNC_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 /** Sync status values for local offline attempts. */
 export const SYNC_STATUS = {

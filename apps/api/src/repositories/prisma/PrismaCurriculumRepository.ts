@@ -157,11 +157,19 @@ export class PrismaCurriculumRepository implements CurriculumRepository {
     });
   }
 
-  async findQuestionsByLessonId(lessonId: string): Promise<any[]> {
+  async findQuestionsByLessonId(lessonIdOrName: string): Promise<any[]> {
+    // P2: Accept either the canonical Lesson.id (FK used by Question.lessonId)
+    // or the lesson's display name. The web client only carries the static
+    // curriculum `lesson.name`, so the API must resolve either form.
     const dbQs: any[] = [];
     try {
       const found = await prisma.question.findMany({
-        where: { lessonId }
+        where: {
+          OR: [
+            { lessonId: lessonIdOrName },
+            { lesson: { name: lessonIdOrName } },
+          ],
+        },
       });
       dbQs.push(...found);
     } catch (e) {
@@ -172,7 +180,7 @@ export class PrismaCurriculumRepository implements CurriculumRepository {
     for (const curriculum of allCurriculums) {
       for (const unit of curriculum.units) {
         for (const lesson of unit.lessons) {
-          if (lesson.name === lessonId) {
+          if (lesson.name === lessonIdOrName) {
             staticQs.push(...lesson.questions.map(q => ({
               id: q.id || q.prompt,
               hints: q.hints || []

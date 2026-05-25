@@ -17,6 +17,7 @@ import { LevelUpOverlay } from "./components/LevelUpOverlay";
 import { ClearOverlay } from "./components/ClearOverlay";
 import { ParentShareModal } from "./components/ParentShareModal";
 import { ProgressiveHintPanel } from "./components/ProgressiveHintPanel";
+import { OfflineHintBadge } from "@/components/OfflineHintBadge/OfflineHintBadge";
 
 interface UserProfile {
   id: string;
@@ -140,6 +141,10 @@ function ExerciseScreenContent() {
   const { speak, stop } = useRakkyoVoice();
   const [activeQuestions, setActiveQuestions] = useState<any[]>([]);
   const [aiDiagnosis, setAiDiagnosis] = useState<string | null>(null);
+  // D-5: Track offline-cache staleness so OfflineHintBadge can show honest
+  // freshness signals next to cached AI hints / diagnosis content.
+  const [diagnosisStaleLabel, setDiagnosisStaleLabel] = useState<string | null>(null);
+  const [hintStaleLabels, setHintStaleLabels] = useState<{ [stage: number]: string }>({});
   const [isLoadingSimilar, setIsLoadingSimilar] = useState(false);
 
   useEffect(() => {
@@ -510,7 +515,14 @@ function ExerciseScreenContent() {
       if (response.ok) {
         const data = await response.json();
         setAiHints(prev => ({ ...prev, [stageNum]: data.hintText }));
-        
+        // Fresh server hint — drop any prior offline-cache staleness label.
+        setHintStaleLabels(prev => {
+          if (!(stageNum in prev)) return prev;
+          const next = { ...prev };
+          delete next[stageNum];
+          return next;
+        });
+
         if (data.metaDescription) {
           speakText(`${data.metaDescription}。${data.hintText}`, `hint${stageNum}`, "calm");
         } else {
@@ -534,6 +546,18 @@ function ExerciseScreenContent() {
             const cachedHintText = cached.hints[index];
             if (cachedHintText) {
               setAiHints(prev => ({ ...prev, [stageNum]: cachedHintText }));
+              // D-5: Surface staleness alongside the offline-cached hint so
+              // children see when hints are not fresh from the server.
+              if (cached.isStale && cached.staleLabel) {
+                setHintStaleLabels(prev => ({ ...prev, [stageNum]: cached.staleLabel! }));
+              } else {
+                setHintStaleLabels(prev => {
+                  if (!(stageNum in prev)) return prev;
+                  const next = { ...prev };
+                  delete next[stageNum];
+                  return next;
+                });
+              }
               speakText(cachedHintText, `hint${stageNum}`, "neutral");
               setIsLoadingHint(false);
               return;
@@ -665,6 +689,8 @@ function ExerciseScreenContent() {
             setMascotEmotion('incorrect');
             if (data.aiDiagnosis) {
               setAiDiagnosis(data.aiDiagnosis);
+              // Fresh server diagnosis — clear any prior offline-cache staleness label.
+              setDiagnosisStaleLabel(null);
               speak(data.aiDiagnosis, "incorrect");
             } else {
               speak("おしい！ちがうみたいだね。となりのラッキョくんにヒントを聞いてみよう！", "incorrect");
@@ -783,6 +809,9 @@ function ExerciseScreenContent() {
 
         if (customDiagnosis) {
           setAiDiagnosis(customDiagnosis);
+          // D-5: Record stale-label so OfflineHintBadge renders next to the
+          // diagnosis. Clear when the cached diagnosis is fresh.
+          setDiagnosisStaleLabel(staleLabelText);
           speak(staleLabelText ? `${staleLabelText}。${customDiagnosis}` : customDiagnosis, "incorrect");
         } else {
           speak("おしい！ちがうみたいだね。となりのラッキョくんにヒントを聞いてみよう！", "incorrect");
@@ -821,7 +850,9 @@ function ExerciseScreenContent() {
         setHintStage(1);
         setShowFinalAnswer(false);
         setAiHints({});
+        setHintStaleLabels({});
         setAiDiagnosis(null);
+        setDiagnosisStaleLabel(null);
         setMascotEmotion('normal');
         setStartTime(Date.now());
         
@@ -902,7 +933,9 @@ function ExerciseScreenContent() {
     setHintStage(1);
     setShowFinalAnswer(false);
     setAiHints({});
+    setHintStaleLabels({});
     setAiDiagnosis(null);
+    setDiagnosisStaleLabel(null);
     setMascotEmotion('normal'); // Reset mascot emotion
 
     // Clear speech states
@@ -1052,6 +1085,12 @@ function ExerciseScreenContent() {
                     <h4 className="font-extrabold text-sm">
                       {isCorrect ? "正解！すごすぎる！" : "おしい！ちがうみたい..."}
                     </h4>
+                    {/* D-5: Honest authenticity — surface offline-cache staleness next to the AI diagnosis. */}
+                    {!isCorrect && aiDiagnosis && diagnosisStaleLabel && (
+                      <div className="mt-1">
+                        <OfflineHintBadge isStale={true} staleLabel={diagnosisStaleLabel} />
+                      </div>
+                    )}
                     <p className="text-xs font-semibold mt-1 opacity-90 leading-relaxed">
                       {isCorrect
                         ? "この調子で次の問題もクリアして、XPをたくさん集めよう！"
@@ -1141,6 +1180,7 @@ function ExerciseScreenContent() {
             showFinalAnswer={showFinalAnswer}
             setShowFinalAnswer={setShowFinalAnswer}
             aiHints={aiHints}
+            hintStaleLabels={hintStaleLabels}
             currentQuestion={currentQuestion}
             isPlayingTts={isPlayingTts}
             speakText={speakText}

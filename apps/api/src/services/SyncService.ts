@@ -1,6 +1,10 @@
 import { SyncRepository } from '../repositories/SyncRepository';
 import { CurriculumRepository } from '../repositories/CurriculumRepository';
-import { ABUSE_WINDOW_MS, SYNC_RATE_LIMIT_MS } from '@rakkyo/shared';
+import {
+  OFFLINE_SYNC_FUTURE_SKEW_MS,
+  OFFLINE_SYNC_MAX_AGE_MS,
+  SYNC_RATE_LIMIT_MS,
+} from '@rakkyo/shared';
 
 /** Individual attempt sync result for the batch response. */
 interface AttemptSyncResult {
@@ -77,13 +81,20 @@ export class SyncService {
         const attemptDate = new Date(attempt.createdAt);
         const timeDiff = now.getTime() - attemptDate.getTime();
 
-        // P1: Reject attempts with forged timestamps (e.g. in the future or older than the 1h abuse window)
-        // Allow up to 5 minutes (300,000 ms) in the future for potential clock skew.
-        if (timeDiff < -300000 || timeDiff > ABUSE_WINDOW_MS) {
+        // P1: Reject attempts with forged timestamps only when they fall outside the
+        // legitimate offline window. Reject future-skewed timestamps beyond a small
+        // clock-drift allowance, and reject timestamps older than the offline retention
+        // window (30 days) so genuine multi-day offline sessions can still sync.
+        // NOTE: clientEventId already gives us idempotency, so we do NOT need a
+        // 1-hour abuse window here — that broke the core offline-first flow.
+        if (
+          timeDiff < -OFFLINE_SYNC_FUTURE_SKEW_MS ||
+          timeDiff > OFFLINE_SYNC_MAX_AGE_MS
+        ) {
           results.push({
             clientEventId: attempt.clientEventId,
             status: 'rejected',
-            reason: '送信日時のタイムスタンプが時間枠外（未来または1時間以上前）です。',
+            reason: '送信日時のタイムスタンプが許容範囲外（未来または30日以上前）です。',
           });
           continue;
         }

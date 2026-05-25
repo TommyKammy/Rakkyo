@@ -65,7 +65,12 @@ export async function prefetchHints(
 export function getCachedHints(
   db: OfflineDb,
   questionId: string
-): { hints: string[]; fetchedAt: string; isStale: boolean } | null {
+): {
+  hints: string[];
+  fetchedAt: string;
+  isStale: boolean;
+  staleLabel: string | null;
+} | null {
   const row = db.selectOne<{ hints_json: string; fetchedAt: string }>(
     `SELECT hints_json, fetchedAt FROM offline_hint_cache WHERE questionId = ?`,
     [questionId]
@@ -77,10 +82,24 @@ export function getCachedHints(
   const ageMs = Date.now() - fetchedAt.getTime();
   const isStale = ageMs > AI_CACHE_STALE_THRESHOLD_MS;
 
+  // D-5: Honest staleness labeling — mirrors getCachedAiDiagnosis so the
+  // OfflineHintBadge can render a consistent "X時間前のキャッシュ" message.
+  let staleLabel: string | null = null;
+  if (isStale) {
+    const hoursAgo = Math.floor(ageMs / (60 * 60 * 1000));
+    if (hoursAgo < 48) {
+      staleLabel = `${hoursAgo}時間前のキャッシュです`;
+    } else {
+      const daysAgo = Math.floor(hoursAgo / 24);
+      staleLabel = `${daysAgo}日前のキャッシュです`;
+    }
+  }
+
   return {
     hints: JSON.parse(row.hints_json),
     fetchedAt: row.fetchedAt,
     isStale,
+    staleLabel,
   };
 }
 

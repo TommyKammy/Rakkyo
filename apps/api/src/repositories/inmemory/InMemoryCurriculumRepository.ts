@@ -166,14 +166,18 @@ export class InMemoryCurriculumRepository implements CurriculumRepository {
     return limit ? lessons.slice(0, limit) : lessons;
   }
 
-  async findQuestionsByLessonId(lessonId: string): Promise<any[]> {
-    const dynamicQs = inMemoryState.dynamicQuestions.filter(q => q.lessonId === lessonId);
-    
+  async findQuestionsByLessonId(lessonIdOrName: string): Promise<any[]> {
+    // P2: Accept either canonical Lesson.id or lesson name. The in-memory
+    // store keys dynamic questions by name (mirrors the static curriculum
+    // identifier the web client carries), so a single name comparison
+    // matches both forms here.
+    const dynamicQs = inMemoryState.dynamicQuestions.filter(q => q.lessonId === lessonIdOrName);
+
     const staticQs: any[] = [];
     for (const curriculum of allCurriculums) {
       for (const unit of curriculum.units) {
         for (const lesson of unit.lessons) {
-          if (lesson.name === lessonId) {
+          if (lesson.name === lessonIdOrName) {
             staticQs.push(...lesson.questions.map(q => ({
               id: q.id || q.prompt,
               hints: q.hints || []

@@ -104,6 +104,78 @@ describe('SyncService', () => {
     expect(totalCreated).toBe(8);
   });
 
+  // P1 regression: legitimate offline sessions longer than 1 hour must still sync.
+  // Previously a 1h ABUSE_WINDOW_MS gate dropped every attempt older than 1h,
+  // breaking the core offline-first promise (commute / multi-day disconnect).
+  it('accepts attempts older than 1 hour but within the offline retention window (P1)', async () => {
+    const userId = 'test-student-id';
+    const tenHoursAgo = new Date(Date.now() - 10 * 60 * 60 * 1000).toISOString();
+    const result = await service.processBatch(
+      userId,
+      [
+        {
+          clientEventId: crypto.randomUUID(),
+          userId,
+          questionId: 'q-old',
+          isCorrect: true,
+          hintsUsed: 0,
+          answerSubmitted: '42',
+          createdAt: tenHoursAgo,
+        },
+      ],
+      'dev-old'
+    );
+
+    expect(result.results[0].status).toBe('created');
+  });
+
+  // P1 regression: timestamps beyond the offline retention window must still
+  // be rejected so forged-old payloads cannot replay arbitrary history.
+  it('rejects attempts older than the 30-day offline window (P1)', async () => {
+    const userId = 'test-student-id';
+    const longAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const result = await service.processBatch(
+      userId,
+      [
+        {
+          clientEventId: crypto.randomUUID(),
+          userId,
+          questionId: 'q-ancient',
+          isCorrect: true,
+          hintsUsed: 0,
+          answerSubmitted: '42',
+          createdAt: longAgo,
+        },
+      ],
+      'dev-ancient'
+    );
+
+    expect(result.results[0].status).toBe('rejected');
+  });
+
+  // P1 regression: future-skewed timestamps remain rejected (only ±5min clock-drift allowed).
+  it('rejects attempts with future timestamps beyond clock-skew allowance (P1)', async () => {
+    const userId = 'test-student-id';
+    const futureTs = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const result = await service.processBatch(
+      userId,
+      [
+        {
+          clientEventId: crypto.randomUUID(),
+          userId,
+          questionId: 'q-future',
+          isCorrect: true,
+          hintsUsed: 0,
+          answerSubmitted: '42',
+          createdAt: futureTs,
+        },
+      ],
+      'dev-future'
+    );
+
+    expect(result.results[0].status).toBe('rejected');
+  });
+
   // Sync log is recorded for each batch
   it('records sync log for each batch', async () => {
     const userId = 'test-student-id';

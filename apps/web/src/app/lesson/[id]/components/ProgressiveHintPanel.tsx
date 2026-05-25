@@ -4,6 +4,7 @@ import React from "react";
 import { RakkyoMascot } from "../../../dashboard/components/RakkyoMascot";
 import { MathText } from "./MathText";
 import { MathDiagram } from "./MathDiagram";
+import { OfflineHintBadge } from "@/components/OfflineHintBadge/OfflineHintBadge";
 
 interface ProgressiveHintPanelProps {
   showHintPanel: boolean;
@@ -13,6 +14,11 @@ interface ProgressiveHintPanelProps {
   showFinalAnswer: boolean;
   setShowFinalAnswer: (show: boolean) => void;
   aiHints: { [key: number]: string };
+  /**
+   * D-5: Per-stage staleness labels keyed by hint stage (1|2|3) when the
+   * displayed hint was sourced from the offline cache. Absent = fresh.
+   */
+  hintStaleLabels?: { [stage: number]: string };
   currentQuestion: any;
   isPlayingTts: string | null;
   speakText: (text: string, id: string, emotion?: string) => void;
@@ -40,6 +46,7 @@ export function ProgressiveHintPanel({
   showFinalAnswer,
   setShowFinalAnswer,
   aiHints,
+  hintStaleLabels,
   currentQuestion,
   isPlayingTts,
   speakText,
@@ -145,6 +152,9 @@ export function ProgressiveHintPanel({
                 </button>
               ) : null}
             </div>
+            {hintStaleLabels?.[1] && (
+              <OfflineHintBadge isStale={true} staleLabel={hintStaleLabels[1]} />
+            )}
             {hintStage === 1 && isLoadingHint && !aiHints[1] ? (
               <div className="flex items-center gap-2 text-xs text-slate-400 font-bold py-2">
                 <span className="animate-spin rounded-full h-4 w-4 border-2 border-pastel-blue-border border-t-pastel-blue-dark" />
@@ -176,6 +186,9 @@ export function ProgressiveHintPanel({
                 </button>
               ) : null}
             </div>
+            {hintStaleLabels?.[2] && (
+              <OfflineHintBadge isStale={true} staleLabel={hintStaleLabels[2]} />
+            )}
             {hintStage === 2 && isLoadingHint && !aiHints[2] ? (
               <div className="flex items-center gap-2 text-xs text-slate-400 font-bold py-2">
                 <span className="animate-spin rounded-full h-4 w-4 border-2 border-pastel-green-border border-t-pastel-green-dark" />
@@ -212,6 +225,9 @@ export function ProgressiveHintPanel({
                 </button>
               ) : null}
             </div>
+            {hintStaleLabels?.[3] && (
+              <OfflineHintBadge isStale={true} staleLabel={hintStaleLabels[3]} />
+            )}
             {hintStage === 3 && isLoadingHint && !aiHints[3] ? (
               <div className="flex items-center gap-2 text-xs text-slate-400 font-bold py-2">
                 <span className="animate-spin rounded-full h-4 w-4 border-2 border-pastel-pink-border border-t-pastel-pink-dark" />
