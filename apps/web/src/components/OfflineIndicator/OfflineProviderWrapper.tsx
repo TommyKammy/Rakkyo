@@ -20,6 +20,9 @@ export function OfflineProviderWrapper() {
     useState<ServiceWorkerRegistration | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
   const isSyncingRef = useRef(false);
+  // P2: Mirror swRegistration in a ref so handleAttemptEnqueued can read the
+  // latest registration without re-binding the listener on every state change.
+  const swRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
 
   // Sync trigger handler that flushes local SQLite queue using the sync engine
   const handleSyncTrigger = useCallback(async () => {
@@ -125,6 +128,15 @@ export function OfflineProviderWrapper() {
       refreshCount();
       if (navigator.onLine) {
         handleSyncTrigger();
+      } else {
+        // P2: When offline, schedule a Background Sync so the browser will
+        // fire the `sync` event once connectivity returns — even if the
+        // tab/PWA is closed. Without this, enqueueing while offline and then
+        // closing the app strands attempts until the user manually opens the
+        // app again on a reconnect. In browsers without the Background Sync
+        // API, requestBackgroundSync falls back internally; nothing more we
+        // can do here (the next mount/online listener will pick it up).
+        requestBackgroundSync(swRegistrationRef.current);
       }
     };
 
@@ -134,6 +146,7 @@ export function OfflineProviderWrapper() {
     registerServiceWorker(handleSyncTrigger, handleWipeDb).then(
       (reg) => {
         setSwRegistration(reg);
+        swRegistrationRef.current = reg;
       }
     );
 

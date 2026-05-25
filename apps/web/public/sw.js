@@ -133,8 +133,28 @@ self.addEventListener('push', (event) => {
             const deleteIdbKey = () => {
               return new Promise((resolve) => {
                 const req = indexedDB.open('rakkyo-crypto-keys', 1);
+                // P2: Mirror crypto.ts's schema definition. Without this
+                // handler, opening a non-existent DB creates a malformed v1
+                // database missing the `keys` object store, which permanently
+                // breaks subsequent crypto.ts open/get/put operations
+                // (NotFoundError) since they also request version 1 and won't
+                // trigger an upgrade. Creating the store here keeps the DB
+                // schema consistent whether or not the wipe arrives first.
+                req.onupgradeneeded = () => {
+                  const upgradeDb = req.result;
+                  if (!upgradeDb.objectStoreNames.contains('keys')) {
+                    upgradeDb.createObjectStore('keys');
+                  }
+                };
                 req.onsuccess = () => {
                   const db = req.result;
+                  // If the keys store somehow still doesn't exist, the wipe
+                  // is a no-op (there's no key to delete).
+                  if (!db.objectStoreNames.contains('keys')) {
+                    db.close();
+                    resolve();
+                    return;
+                  }
                   try {
                     const tx = db.transaction('keys', 'readwrite');
                     tx.objectStore('keys').delete(`enc_${payload.userId}`);
