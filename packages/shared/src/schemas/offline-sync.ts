@@ -3,7 +3,7 @@ import { z } from 'zod';
 /** Schema for a single offline Attempt to be synced */
 export const SyncAttemptSchema = z.object({
   clientEventId: z.string().uuid(),
-  userId: z.string().uuid(),
+  userId: z.string(),
   questionId: z.string(),
   isCorrect: z.boolean(),
   hintsUsed: z.number().int().min(0).max(10),

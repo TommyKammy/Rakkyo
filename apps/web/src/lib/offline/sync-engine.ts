@@ -18,7 +18,7 @@ import {
   SYNC_RATE_LIMIT_MS,
   OFFLINE_SCHEMA_VERSION,
 } from '@rakkyo/shared';
-import { getOrCreateUserKey, encrypt, decrypt } from './crypto';
+import { getOrCreateUserKey, getUserKey, encrypt, decrypt } from './crypto';
 
 /** API base URL — mirrors the existing hardcoded pattern in the codebase. */
 const API_BASE = 'http://localhost:4000';
@@ -140,10 +140,14 @@ export async function flushPendingAttempts(
       pending.map(async (p) => {
         let answer = p.answerSubmitted;
         try {
-          const key = await getOrCreateUserKey(p.userId);
+          const key = await getUserKey(p.userId);
+          if (!key) {
+            throw new Error('Encryption key is missing - cannot decrypt attempt');
+          }
           answer = await decrypt(p.answerSubmitted, key);
         } catch (e) {
           console.error('Failed to decrypt local attempt answer for sync:', e);
+          answer = 'WIPED_OR_CORRUPT_DATA';
         }
         return {
           clientEventId: p.clientEventId,

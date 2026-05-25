@@ -118,25 +118,107 @@ export class PrismaSyncRepository implements SyncRepository {
   }> {
     const attempts = await prisma.attempt.findMany({
       where: { userId },
-      select: { isCorrect: true, hintsUsed: true, createdAt: true },
+      select: { isCorrect: true, hintsUsed: true, questionId: true, createdAt: true },
       orderBy: { createdAt: 'asc' },
     });
 
-    let totalXp = 0;
-    for (const a of attempts) {
-      totalXp += a.isCorrect ? XP_PER_CORRECT : (a.hintsUsed > 0 ? XP_PER_GRIT : 0);
+    if (attempts.length === 0) {
+      return { currentXp: 0, level: 1, streakCount: 0 };
     }
 
-    const level = Math.floor(totalXp / XP_PER_LEVEL) + 1;
-    const streakCount = this.calculateStreak(attempts.map((a) => a.createdAt));
+    // Helper to format Date into JST YYYY-MM-DD
+    const getJstDate = (date: Date): string => {
+      const jstTime = date.getTime() + (9 * 60 * 60 * 1000);
+      const jstDate = new Date(jstTime);
+      return jstDate.toISOString().split('T')[0];
+    };
+
+    // Group attempts by JST date
+    const attemptsByDay = new Map<string, any[]>();
+    for (const a of attempts) {
+      const dayStr = getJstDate(a.createdAt);
+      if (!attemptsByDay.has(dayStr)) {
+        attemptsByDay.set(dayStr, []);
+      }
+      attemptsByDay.get(dayStr)!.push(a);
+    }
+
+    const sortedDays = [...attemptsByDay.keys()].sort();
+    
+    let currentXp = 0;
+    let currentLevel = 1;
+    let currentStreak = 0;
+    let lastActiveStr: string | null = null;
+    const history: any[] = [];
+
+    for (const dayStr of sortedDays) {
+      // 1. Update streak day-by-day
+      if (!lastActiveStr) {
+        currentStreak = 1;
+      } else {
+        const lastActiveDate = new Date(lastActiveStr);
+        const currentDate = new Date(dayStr);
+        const diffMs = currentDate.getTime() - lastActiveDate.getTime();
+        const diffDays = Math.round(diffMs / (24 * 60 * 60 * 1000));
+        if (diffDays === 1) {
+          currentStreak += 1;
+        } else if (diffDays > 1) {
+          currentStreak = 1;
+        }
+      }
+      lastActiveStr = dayStr;
+
+      // 2. Process day's attempts chronologically
+      const dayAttempts = attemptsByDay.get(dayStr)!.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      
+      let adventureCompleted = false;
+      let gritCompleted = false;
+      let intuitionCompleted = false;
+      let attemptsCountToday = 0;
+
+      for (const a of dayAttempts) {
+        attemptsCountToday++;
+        const isCorrect = a.isCorrect;
+        
+        // Check Grit retry bonus
+        const pastForQ = history.filter(h => h.questionId === a.questionId);
+        const isGritBonus = isCorrect && pastForQ.some(p => !p.isCorrect || p.hintsUsed >= 2);
+        
+        const xpAwarded = isCorrect ? (isGritBonus ? 30 : 10) : 0;
+        let questXp = 0;
+
+        if (!adventureCompleted && attemptsCountToday >= 3) {
+          adventureCompleted = true;
+          questXp += 50;
+        }
+        if (!gritCompleted && isCorrect && a.hintsUsed >= 1) {
+          gritCompleted = true;
+          questXp += 50;
+        }
+        if (!intuitionCompleted && isCorrect && a.hintsUsed === 0) {
+          intuitionCompleted = true;
+          questXp += 50;
+        }
+
+        currentXp += xpAwarded + questXp;
+        let xpNeeded = currentLevel * 100;
+        while (currentXp >= xpNeeded) {
+          currentXp -= xpNeeded;
+          currentLevel += 1;
+          xpNeeded = currentLevel * 100;
+        }
+
+        history.push(a);
+      }
+    }
 
     // Update user record atomically
     await prisma.user.update({
       where: { id: userId },
-      data: { currentXp: totalXp, level, streakCount },
+      data: { currentXp, level: currentLevel, streakCount: currentStreak },
     });
 
-    return { currentXp: totalXp, level, streakCount };
+    return { currentXp, level: currentLevel, streakCount: currentStreak };
   }
 
   /** @inheritdoc */

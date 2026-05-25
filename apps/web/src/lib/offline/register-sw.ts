@@ -10,6 +10,9 @@
 /** Sync tag matching the Service Worker's expected tag. */
 const SYNC_TAG = 'rakkyo-attempt-sync';
 
+/** Global handle to active sync trigger callback for Safari/non-Chrome browser fallbacks. */
+let activeSyncTrigger: (() => void) | null = null;
+
 /**
  * Register the Service Worker and set up message listeners.
  *
@@ -21,6 +24,7 @@ export async function registerServiceWorker(
   onSyncTrigger: () => void,
   onWipeDb: (userId: string) => void
 ): Promise<ServiceWorkerRegistration | null> {
+  activeSyncTrigger = onSyncTrigger;
   if (!('serviceWorker' in navigator)) {
     console.warn('Service Worker is not supported in this browser.');
     return null;
@@ -72,7 +76,11 @@ export async function registerServiceWorker(
 export async function requestBackgroundSync(
   registration: ServiceWorkerRegistration | null
 ): Promise<void> {
-  if (!registration) return;
+  if (!registration) {
+    // If SW is not registered, still try to trigger immediate sync as ultimate fallback
+    activeSyncTrigger?.();
+    return;
+  }
 
   try {
     // Background Sync API (Chrome-only, may not be available in Safari)
@@ -80,9 +88,12 @@ export async function requestBackgroundSync(
       await (registration as ServiceWorkerRegistration & {
         sync: { register: (tag: string) => Promise<void> };
       }).sync.register(SYNC_TAG);
+    } else {
+      // Fallback: Trigger immediate sync for browsers without Background Sync API (Safari, etc.) (P1-2)
+      activeSyncTrigger?.();
     }
   } catch {
-    // Background sync not available — the online event handler
-    // in useNetworkMonitor will handle sync as a fallback.
+    // Fallback: Background sync registration failed or unsupported — trigger immediately
+    activeSyncTrigger?.();
   }
 }

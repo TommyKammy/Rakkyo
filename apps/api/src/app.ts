@@ -23,7 +23,14 @@ app.use(express.json({ limit: '2mb' }));
 app.use(repositoryMiddleware);
 
 // Serve cached TTS audio files statically
-app.use('/cache/tts', express.static(path.join(__dirname, '../public/cache/tts')));
+app.use(
+  '/cache/tts',
+  express.static(path.join(__dirname, '../public/cache/tts'), {
+    setHeaders: (res) => {
+      res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+    },
+  })
+);
 
 app.use('/api/auth', authRouter);
 app.use('/api/lessons', lessonsRouter);

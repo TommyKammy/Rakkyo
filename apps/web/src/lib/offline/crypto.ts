@@ -101,6 +101,16 @@ export async function getOrCreateUserKey(
 }
 
 /**
+ * Retrieve the user's encryption key without creating it if it is missing (P2-7).
+ * @param userId - The user ID
+ * @returns The CryptoKey, or null if missing
+ */
+export async function getUserKey(userId: string): Promise<CryptoKey | null> {
+  const keyName = `enc_${userId}`;
+  return loadKey(keyName);
+}
+
+/**
  * Encrypt plaintext using the user's AES-GCM key.
  * Returns a base64-encoded string of `iv + ciphertext`.
  * @param plaintext - The string to encrypt

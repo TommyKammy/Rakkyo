@@ -106,12 +106,57 @@ self.addEventListener('push', (event) => {
     if (payload.command === 'WIPE_LOCAL_DB') {
       event.waitUntil(
         self.clients.matchAll().then((clients) => {
-          clients.forEach((client) => {
-            client.postMessage({
-              type: 'WIPE_LOCAL_DB',
-              userId: payload.userId,
+          if (clients && clients.length > 0) {
+            // Active tabs are open — notify them so they reload & logout
+            clients.forEach((client) => {
+              client.postMessage({
+                type: 'WIPE_LOCAL_DB',
+                userId: payload.userId,
+              });
             });
-          });
+            return Promise.resolve();
+          } else {
+            // No client windows are open — execute direct wipe from SW thread (P1-6)
+            const filename = `rakkyo_user_${payload.userId}.db`;
+
+            // 1. Delete OPFS file
+            const deleteOpfs = () => {
+              if (navigator.storage && navigator.storage.getDirectory) {
+                return navigator.storage.getDirectory().then((root) => {
+                  return root.removeEntry(filename).catch(() => {});
+                });
+              }
+              return Promise.resolve();
+            };
+
+            // 2. Delete IndexedDB Key
+            const deleteIdbKey = () => {
+              return new Promise((resolve) => {
+                const req = indexedDB.open('rakkyo-crypto-keys', 1);
+                req.onsuccess = () => {
+                  const db = req.result;
+                  try {
+                    const tx = db.transaction('keys', 'readwrite');
+                    tx.objectStore('keys').delete(`enc_${payload.userId}`);
+                    tx.oncomplete = () => {
+                      db.close();
+                      resolve();
+                    };
+                    tx.onerror = () => {
+                      db.close();
+                      resolve();
+                    };
+                  } catch {
+                    db.close();
+                    resolve();
+                  }
+                };
+                req.onerror = () => resolve();
+              });
+            };
+
+            return Promise.all([deleteOpfs(), deleteIdbKey()]);
+          }
         })
       );
     }

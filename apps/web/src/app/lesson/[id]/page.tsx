@@ -679,6 +679,7 @@ function ExerciseScreenContent() {
           createdAt: new Date().toISOString(),
         });
         console.log("Successfully enqueued pending offline attempt:", localId);
+        window.dispatchEvent(new CustomEvent('rakkyo-offline-attempt-enqueued'));
       } catch (e) {
         console.error("Failed to enqueue offline attempt:", e);
       }

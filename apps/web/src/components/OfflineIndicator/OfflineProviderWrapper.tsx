@@ -75,30 +75,48 @@ export function OfflineProviderWrapper() {
 
   useEffect(() => {
     // 1. Initial pending count load on mount
-    const userStr = localStorage.getItem('rakkyo_user');
-    if (userStr) {
-      try {
-        const user = JSON.parse(userStr);
-        const userId = user.id;
-        if (userId) {
-          import('@/lib/offline/db').then(async ({ openUserDb }) => {
-            const db = await openUserDb(userId);
-            import('@/lib/offline/sync-engine').then(({ getPendingCount }) => {
-              setPendingCount(getPendingCount(db));
+    const refreshCount = () => {
+      const userStr = localStorage.getItem('rakkyo_user');
+      if (userStr) {
+        try {
+          const user = JSON.parse(userStr);
+          const userId = user.id;
+          if (userId) {
+            import('@/lib/offline/db').then(async ({ openUserDb }) => {
+              const db = await openUserDb(userId);
+              import('@/lib/offline/sync-engine').then(({ getPendingCount }) => {
+                setPendingCount(getPendingCount(db));
+              });
             });
-          });
+          }
+        } catch (e) {
+          console.error('Failed to initialize pending count:', e);
         }
-      } catch (e) {
-        console.error('Failed to initialize pending count:', e);
       }
-    }
+    };
 
-    // 2. Register Service Worker with trigger callbacks
+    refreshCount();
+
+    // 2. Listen to custom attempt enqueued events for immediate sync/count updates (P1-4)
+    const handleAttemptEnqueued = () => {
+      refreshCount();
+      if (navigator.onLine) {
+        handleSyncTrigger();
+      }
+    };
+
+    window.addEventListener('rakkyo-offline-attempt-enqueued', handleAttemptEnqueued);
+
+    // 3. Register Service Worker with trigger callbacks
     registerServiceWorker(handleSyncTrigger, handleWipeDb).then(
       (reg) => {
         setSwRegistration(reg);
       }
     );
+
+    return () => {
+      window.removeEventListener('rakkyo-offline-attempt-enqueued', handleAttemptEnqueued);
+    };
   }, [handleSyncTrigger, handleWipeDb]);
 
   const handleSyncRequest = useCallback(() => {
