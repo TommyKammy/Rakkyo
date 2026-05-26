@@ -82,6 +82,20 @@ export interface OfflineDb {
 const activeInstances = new Map<string, OfflineDb>();
 
 /**
+ * In-flight open() promises per userId.
+ *
+ * P2: `openUserDb()` does async work (dynamic import + OPFS constructor)
+ * before it can populate `activeInstances`. Without this guard, two
+ * concurrent callers (e.g. OfflineProvider init + lesson prefetch) both
+ * miss the cache check, both await the WASM import, and both call
+ * `new sqlite3.oo1.OpfsDb(filename)` on the same file — which OPFS treats
+ * as a duplicate handle and can surface as a lock/open failure. Storing
+ * the in-flight Promise here makes subsequent concurrent callers await
+ * the same load.
+ */
+const pendingOpens = new Map<string, Promise<OfflineDb>>();
+
+/**
  * Check if OPFS + SharedArrayBuffer are available in this browser.
  * @returns true if the full OPFS VFS can be used
  */
@@ -108,25 +122,43 @@ export async function openUserDb(userId: string): Promise<OfflineDb> {
     return cached;
   }
 
-  if (!isOpfsAvailable()) {
-    // Fallback: in-memory SQLite (data lost on reload, but learning continues)
-    return openInMemoryDb(userId);
+  // P2: De-duplicate concurrent opens — return the same in-flight promise.
+  const inFlight = pendingOpens.get(userId);
+  if (inFlight) {
+    return inFlight;
   }
 
-  // Dynamic import — only loads WASM on first call
-  const sqlite3Module = await import('@sqlite.org/sqlite-wasm');
-  const sqlite3 = await sqlite3Module.default();
+  const openPromise = (async (): Promise<OfflineDb> => {
+    if (!isOpfsAvailable()) {
+      // Fallback: in-memory SQLite (data lost on reload, but learning continues)
+      return openInMemoryDb(userId);
+    }
 
-  const filename = `rakkyo_user_${userId}.db`;
-  const db = new sqlite3.oo1.OpfsDb(filename);
+    // Dynamic import — only loads WASM on first call
+    const sqlite3Module = await import('@sqlite.org/sqlite-wasm');
+    const sqlite3 = await sqlite3Module.default();
 
-  const wrapper = createDbWrapper(db, sqlite3);
-  activeInstances.set(userId, wrapper);
+    const filename = `rakkyo_user_${userId}.db`;
+    const db = new sqlite3.oo1.OpfsDb(filename);
 
-  // Run migrations
-  applyMigrations(wrapper);
+    const wrapper = createDbWrapper(db, sqlite3);
+    activeInstances.set(userId, wrapper);
 
-  return wrapper;
+    // Run migrations
+    applyMigrations(wrapper);
+
+    return wrapper;
+  })();
+
+  pendingOpens.set(userId, openPromise);
+  try {
+    return await openPromise;
+  } finally {
+    // Always clear the in-flight entry so retries after a failure can
+    // attempt fresh; on success the cached instance in activeInstances
+    // already short-circuits future callers.
+    pendingOpens.delete(userId);
+  }
 }
 
 /**

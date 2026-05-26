@@ -80,8 +80,22 @@ export class SyncService {
     const results: AttemptSyncResult[] = [];
     const now = new Date();
 
+    // P2: Sort by createdAt ASC so server-derived `isReview` is independent
+    // of the payload's item ordering. Without this, a batch that lists a
+    // newer attempt before its older prerequisite would evaluate the newer
+    // one first (no prior in DB yet → isReview=false), then the older one,
+    // leaving identical history graded differently from the chronological
+    // case. Sorting up front lets each attempt's prior-attempt lookup see
+    // the already-persisted predecessors from the same batch.
+    const sortedAttempts = [...attempts].sort((a, b) => {
+      const aTs = new Date(a.createdAt).getTime();
+      const bTs = new Date(b.createdAt).getTime();
+      // Stable on equal timestamps: keep payload order.
+      return aTs - bTs;
+    });
+
     let isFirst = true;
-    for (const attempt of attempts) {
+    for (const attempt of sortedAttempts) {
       try {
         if (!isFirst && process.env.NODE_ENV !== 'test') {
           // D-7: Throttle database update attempts (1 entry/sec) to prevent load/abuse bursts (P2-11)

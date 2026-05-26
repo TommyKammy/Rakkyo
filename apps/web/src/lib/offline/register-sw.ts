@@ -10,8 +10,20 @@
 /** Sync tag matching the Service Worker's expected tag. */
 const SYNC_TAG = 'rakkyo-attempt-sync';
 
-/** Global handle to active sync trigger callback for Safari/non-Chrome browser fallbacks. */
-let activeSyncTrigger: (() => void) | null = null;
+/**
+ * Web Locks name used to serialize the immediate-sync fallback across tabs
+ * on browsers without the Background Sync API (Safari, etc.).
+ * Same-origin scope is sufficient for cross-tab coordination here.
+ */
+const CROSS_TAB_SYNC_LOCK = 'rakkyo-sync-flush';
+
+/**
+ * Global handle to active sync trigger callback for Safari/non-Chrome
+ * browser fallbacks. The function is async under the hood; treat the
+ * return value as `void | Promise<void>` so we can await it inside a
+ * Web Locks callback when serializing across tabs.
+ */
+let activeSyncTrigger: (() => void | Promise<void>) | null = null;
 
 /**
  * Register the Service Worker and set up message listeners.
@@ -21,7 +33,7 @@ let activeSyncTrigger: (() => void) | null = null;
  * @returns The ServiceWorkerRegistration, or null if SW is unsupported
  */
 export async function registerServiceWorker(
-  onSyncTrigger: () => void,
+  onSyncTrigger: () => void | Promise<void>,
   onWipeDb: (userId: string) => void
 ): Promise<ServiceWorkerRegistration | null> {
   activeSyncTrigger = onSyncTrigger;
@@ -78,7 +90,7 @@ export async function requestBackgroundSync(
 ): Promise<void> {
   if (!registration) {
     // If SW is not registered, still try to trigger immediate sync as ultimate fallback
-    activeSyncTrigger?.();
+    await runImmediateSyncFallback();
     return;
   }
 
@@ -90,10 +102,46 @@ export async function requestBackgroundSync(
       }).sync.register(SYNC_TAG);
     } else {
       // Fallback: Trigger immediate sync for browsers without Background Sync API (Safari, etc.) (P1-2)
-      activeSyncTrigger?.();
+      await runImmediateSyncFallback();
     }
   } catch {
     // Fallback: Background sync registration failed or unsupported — trigger immediately
-    activeSyncTrigger?.();
+    await runImmediateSyncFallback();
   }
+}
+
+/**
+ * Run the immediate-sync fallback while serializing across tabs.
+ *
+ * P2: On browsers without the Background Sync API every open tab would
+ * otherwise launch its own `flushPendingAttempts()` simultaneously (the
+ * per-tab `isSyncingRef` only guards within a single tab), reintroducing
+ * concurrent queue processing and duplicate uploads despite the
+ * service-worker-side single-client fix. Wrap the trigger in a Web Locks
+ * acquisition with `ifAvailable: true` so only the first tab to grab the
+ * lock proceeds; others see `null` and skip — whichever tab wins flushes
+ * the shared OPFS queue on behalf of all peers.
+ */
+async function runImmediateSyncFallback(): Promise<void> {
+  if (!activeSyncTrigger) return;
+
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  if (!locks || typeof locks.request !== 'function') {
+    // No Web Locks API support (older Safari etc.) — fall back to direct call.
+    // Cross-tab coordination is best-effort in that environment.
+    await activeSyncTrigger();
+    return;
+  }
+
+  await locks.request(
+    CROSS_TAB_SYNC_LOCK,
+    { ifAvailable: true },
+    async (lock) => {
+      if (!lock) {
+        // Another tab is already flushing the shared queue — skip.
+        return;
+      }
+      await activeSyncTrigger?.();
+    }
+  );
 }

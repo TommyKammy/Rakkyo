@@ -256,6 +256,56 @@ describe('SyncService', () => {
     expect(newlySyncedReview?.isReview).toBe(true); // server-derived
   });
 
+  // P2 regression: isReview derivation must be independent of batch payload order.
+  it('derives isReview correctly when batch lists newer attempt first (P2)', async () => {
+    const userId = 'test-student-id';
+    const questionId = 'q-order-test';
+    const baseTs = Date.now();
+    const olderIso = new Date(baseTs - 60_000).toISOString();
+    const newerIso = new Date(baseTs).toISOString();
+
+    const eventIdOlder = crypto.randomUUID();
+    const eventIdNewer = crypto.randomUUID();
+
+    // Payload deliberately newer-first to exercise the sort.
+    await service.processBatch(
+      userId,
+      [
+        {
+          clientEventId: eventIdNewer,
+          userId,
+          questionId,
+          isCorrect: true,
+          hintsUsed: 0,
+          answerSubmitted: 'right',
+          createdAt: newerIso,
+        },
+        {
+          clientEventId: eventIdOlder,
+          userId,
+          questionId,
+          isCorrect: true,
+          hintsUsed: 0,
+          answerSubmitted: 'right',
+          createdAt: olderIso,
+        },
+      ],
+      'dev-order'
+    );
+
+    const older = inMemoryState.attempts.find(
+      (a) => a.clientEventId === eventIdOlder
+    );
+    const newer = inMemoryState.attempts.find(
+      (a) => a.clientEventId === eventIdNewer
+    );
+
+    // Older attempt has no prior correct → not review.
+    expect(older?.isReview).toBe(false);
+    // Newer attempt has the older one as a prior correct attempt → review.
+    expect(newer?.isReview).toBe(true);
+  });
+
   it('clamps client-supplied hintsUsed to the curriculum stage cap (P1)', async () => {
     const userId = 'test-student-id';
     const eventId = crypto.randomUUID();
