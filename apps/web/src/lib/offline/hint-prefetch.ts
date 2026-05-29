@@ -58,12 +58,19 @@ export async function prefetchHints(
  * Get cached hints for a question from local SQLite.
  * Returns null if not cached.
  *
+ * P2: `offline_hint_cache` is keyed by `(lessonId, questionId)` because
+ * the same questionId can exist across lessons (the fallback path uses
+ * prompt-based IDs which collide). Scoping the read by lessonId avoids
+ * returning hints from the wrong lesson.
+ *
  * @param db - The user's OfflineDb handle
+ * @param lessonId - The lesson the question belongs to
  * @param questionId - The question ID
  * @returns Cached hints with staleness metadata, or null
  */
 export function getCachedHints(
   db: OfflineDb,
+  lessonId: string,
   questionId: string
 ): {
   hints: string[];
@@ -72,8 +79,10 @@ export function getCachedHints(
   staleLabel: string | null;
 } | null {
   const row = db.selectOne<{ hints_json: string; fetchedAt: string }>(
-    `SELECT hints_json, fetchedAt FROM offline_hint_cache WHERE questionId = ?`,
-    [questionId]
+    `SELECT hints_json, fetchedAt
+       FROM offline_hint_cache
+      WHERE lessonId = ? AND questionId = ?`,
+    [lessonId, questionId]
   );
 
   if (!row) return null;

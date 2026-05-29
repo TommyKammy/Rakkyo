@@ -539,7 +539,14 @@ function ExerciseScreenContent() {
           const { openUserDb } = await import('@/lib/offline/db');
           const { getCachedHints } = await import('@/lib/offline/hint-prefetch');
           const db = await openUserDb(u.id);
-          const cached = getCachedHints(db, currentQuestion.id || currentQuestion.prompt);
+          // P2: scope the cache lookup by lesson so cross-lesson
+          // questionId collisions (prompt-fallback IDs) can't surface
+          // hints from a different lesson.
+          const cached = getCachedHints(
+            db,
+            lesson.name,
+            currentQuestion.id || currentQuestion.prompt
+          );
           
           if (cached && cached.hints && cached.hints.length > 0) {
             const index = Math.min(stageNum - 1, cached.hints.length - 1);

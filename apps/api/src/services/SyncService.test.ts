@@ -21,9 +21,37 @@ describe('SyncService', () => {
     service = new SyncService(repo, curriculumRepo, attemptRepo);
   });
 
+  /**
+   * Seed a curriculum-resolvable question so SyncService's new unknown-
+   * questionId rejection path doesn't drop the attempt. The question's
+   * `answers` includes the `expectedAnswer` so server-side correctness
+   * matches what the test claims.
+   */
+  function seedQuestion(id: string, expectedAnswer: string) {
+    inMemoryState.dynamicQuestions.push({
+      id,
+      lessonId: 'test-lesson',
+      prompt: id,
+      type: 'TEXT_SHORT',
+      answers: [expectedAnswer],
+      options: [],
+      explanation: '',
+      hints: [],
+      createdAt: new Date().toISOString(),
+    } as any);
+  }
+
   // D-2: CRDT merge order independence — random insertion order → same XP
   it('produces same XP regardless of attempt insertion order (D-2)', async () => {
     const userId = 'test-student-id';
+    // Server now derives isCorrect from canonical answers, so seed each
+    // question with the answer the test wants to count as correct.
+    for (let i = 0; i < 20; i++) {
+      const isCorrect = i % 3 !== 0;
+      // Use the actual submitted answer for correct rows, and a different
+      // canonical answer for incorrect rows so server-side recompute matches.
+      seedQuestion(`q-${i}`, isCorrect ? `answer-${i}` : `__canonical-${i}`);
+    }
     const baseAttempts = Array.from({ length: 20 }, (_, i) => ({
       clientEventId: crypto.randomUUID(),
       userId,
@@ -37,9 +65,13 @@ describe('SyncService', () => {
     // First pass: insert in order
     const result1 = await service.processBatch(userId, baseAttempts, 'dev1');
 
-    // Reset state
+    // Reset state — re-seed questions because reset() clears dynamicQuestions.
     inMemoryState.reset();
     resetSyncLogs();
+    for (let i = 0; i < 20; i++) {
+      const isCorrect = i % 3 !== 0;
+      seedQuestion(`q-${i}`, isCorrect ? `answer-${i}` : `__canonical-${i}`);
+    }
 
     // Second pass: insert in reverse order
     const reversed = [...baseAttempts].reverse();
@@ -53,6 +85,7 @@ describe('SyncService', () => {
   // D-1: Idempotent re-send — same clientEventId inserted once
   it('handles idempotent re-sends correctly (D-1)', async () => {
     const userId = 'test-student-id';
+    seedQuestion('q1', '42');
     const eventId = crypto.randomUUID();
     const attempt = {
       clientEventId: eventId,
@@ -77,6 +110,7 @@ describe('SyncService', () => {
   it('handles 8 concurrent batch requests safely', async () => {
     const userId = 'test-student-id';
 
+    for (let i = 0; i < 8; i++) seedQuestion(`q-concurrent-${i}`, `a-${i}`);
     const batches = Array.from({ length: 8 }, (_, i) => ({
       attempts: [
         {
@@ -112,6 +146,7 @@ describe('SyncService', () => {
   // breaking the core offline-first promise (commute / multi-day disconnect).
   it('accepts attempts older than 1 hour but within the offline retention window (P1)', async () => {
     const userId = 'test-student-id';
+    seedQuestion('q-old', '42');
     const tenHoursAgo = new Date(Date.now() - 10 * 60 * 60 * 1000).toISOString();
     const result = await service.processBatch(
       userId,
@@ -183,6 +218,8 @@ describe('SyncService', () => {
   it('derives isReview server-side instead of trusting the client (P1)', async () => {
     const userId = 'test-student-id';
     const questionId = 'q-review-test';
+    seedQuestion(questionId, 'right');
+    seedQuestion('q-fresh-no-prior', 'whatever');
 
     // Pre-seed a prior correct attempt with an explicitly older timestamp so
     // the server-side isReview derivation (strict <) can detect it.
@@ -260,6 +297,7 @@ describe('SyncService', () => {
   it('derives isReview correctly when batch lists newer attempt first (P2)', async () => {
     const userId = 'test-student-id';
     const questionId = 'q-order-test';
+    seedQuestion(questionId, 'right');
     const baseTs = Date.now();
     const olderIso = new Date(baseTs - 60_000).toISOString();
     const newerIso = new Date(baseTs).toISOString();
@@ -308,6 +346,7 @@ describe('SyncService', () => {
 
   it('clamps client-supplied hintsUsed to the curriculum stage cap (P1)', async () => {
     const userId = 'test-student-id';
+    seedQuestion('q-hints-clamp', 'whatever');
     const eventId = crypto.randomUUID();
 
     await service.processBatch(
@@ -332,9 +371,42 @@ describe('SyncService', () => {
     expect(persisted?.hintsUsed).toBe(3);
   });
 
+  // P1 regression: forged questionIds must be rejected (not silently accepted with client isCorrect).
+  it('rejects offline attempts whose questionId is unknown (P1)', async () => {
+    const userId = 'test-student-id';
+    const forgedEventId = crypto.randomUUID();
+    const forgedQuestionId = 'q-does-not-exist';
+    const result = await service.processBatch(
+      userId,
+      [
+        {
+          clientEventId: forgedEventId,
+          userId,
+          questionId: forgedQuestionId,
+          isCorrect: true, // forged
+          hintsUsed: 0,
+          answerSubmitted: 'forged',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      'dev-unknown'
+    );
+
+    expect(result.results[0].status).toBe('rejected');
+    expect(result.results[0].reason).toMatch(/不明な問題ID/);
+    // Nothing from the forged payload should be persisted.
+    expect(
+      inMemoryState.attempts.find(
+        (a) => a.clientEventId === forgedEventId || a.questionId === forgedQuestionId
+      )
+    ).toBeUndefined();
+  });
+
   // Sync log is recorded for each batch
   it('records sync log for each batch', async () => {
     const userId = 'test-student-id';
+    seedQuestion('q1', '42');
+    seedQuestion('q2', 'right');
 
     await service.processBatch(
       userId,

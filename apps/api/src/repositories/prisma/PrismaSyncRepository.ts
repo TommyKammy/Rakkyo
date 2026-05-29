@@ -1,5 +1,6 @@
 import { SyncRepository } from '../SyncRepository';
 import prisma from '../../db';
+import { withPrismaRetry } from '../../utils/prismaRetry';
 
 /** XP earned per correct answer. */
 const XP_PER_CORRECT = 10;
@@ -118,13 +119,43 @@ export class PrismaSyncRepository implements SyncRepository {
     level: number;
     streakCount: number;
   }> {
-    const attempts = await prisma.attempt.findMany({
+    // P1: Wrap read-compute-write in a Serializable transaction with
+    // P2034 retry. Two concurrent /api/sync/batch requests for the same
+    // user would otherwise each read a snapshot, compute aggregate XP /
+    // streak from it, and `user.update` blindly — the later writer would
+    // overwrite the earlier (newer) aggregate with a stale value until
+    // some later sync ran. Serializable isolation forces one of the
+    // concurrent transactions to abort with P2034 and `withPrismaRetry`
+    // re-runs it against the now-fresh snapshot.
+    return withPrismaRetry(() =>
+      prisma.$transaction(
+        async (tx) => this.recalculateUserStatsInTx(tx, userId),
+        { isolationLevel: 'Serializable' }
+      )
+    );
+  }
+
+  /**
+   * Inner implementation of recalculateUserStats running inside a
+   * Serializable transaction. All reads + the single user.update happen
+   * against the same snapshot, so concurrent recomputes either both see
+   * each other's writes (one retries) or one wins outright.
+   */
+  private async recalculateUserStatsInTx(
+    tx: typeof prisma | Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+    userId: string
+  ): Promise<{ currentXp: number; level: number; streakCount: number }> {
+    const attempts = await tx.attempt.findMany({
       where: { userId },
       select: { isCorrect: true, hintsUsed: true, questionId: true, createdAt: true, isReview: true },
       orderBy: { createdAt: 'asc' },
     });
 
     if (attempts.length === 0) {
+      await tx.user.update({
+        where: { id: userId },
+        data: { currentXp: 0, level: 1, streakCount: 0 },
+      });
       return { currentXp: 0, level: 1, streakCount: 0 };
     }
 
@@ -216,7 +247,7 @@ export class PrismaSyncRepository implements SyncRepository {
       }
     }
 
-    // Update user record atomically
+    // Update user record atomically — runs inside the Serializable tx.
     const updateData: any = {
       currentXp,
       level: currentLevel,
@@ -226,7 +257,7 @@ export class PrismaSyncRepository implements SyncRepository {
       updateData.lastActiveDate = new Date(lastActiveStr);
     }
 
-    await prisma.user.update({
+    await tx.user.update({
       where: { id: userId },
       data: updateData,
     });

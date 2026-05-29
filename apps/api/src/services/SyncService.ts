@@ -125,20 +125,44 @@ export class SyncService {
         }
 
         // P1: Server-Side Correctness Verification.
-        // Recompute correctness server-side by checking submitted answers against curriculum answers before persistence.
-        let isCorrect = attempt.isCorrect;
+        // Recompute correctness server-side by checking submitted answers
+        // against canonical curriculum answers before persistence.
+        //
+        // If the questionId can't be resolved against the curriculum, we
+        // refuse the attempt entirely rather than fall back to the client's
+        // claimed isCorrect — otherwise a forged offline payload with a
+        // bogus questionId could inflate XP / quest progression via
+        // recalculateUserStats. A real lookup error (DB outage) keeps the
+        // attempt retryable on the client (status: rejected).
+        let question: any = null;
         try {
-          const question = await this.curriculumRepo.findQuestionById(attempt.questionId);
-          if (question) {
-            isCorrect = question.answers.some(
-              (ans: string) => ans.toLowerCase().trim() === attempt.answerSubmitted.toLowerCase().trim()
-            );
-          }
+          question = await this.curriculumRepo.findQuestionById(attempt.questionId);
         } catch (err) {
-          console.error(`Failed to verify correctness for question ${attempt.questionId} server-side:`, err);
-          // Keep original client-reported isCorrect if database check errors out
-          isCorrect = attempt.isCorrect;
+          console.error(
+            `Failed to verify correctness for question ${attempt.questionId} server-side:`,
+            err
+          );
+          results.push({
+            clientEventId: attempt.clientEventId,
+            status: 'rejected',
+            reason: '問題の検証に失敗しました。後で再試行されます。',
+          });
+          continue;
         }
+
+        if (!question) {
+          results.push({
+            clientEventId: attempt.clientEventId,
+            status: 'rejected',
+            reason: '不明な問題IDのため受け付けできません。',
+          });
+          continue;
+        }
+
+        const isCorrect = question.answers.some(
+          (ans: string) =>
+            ans.toLowerCase().trim() === attempt.answerSubmitted.toLowerCase().trim()
+        );
 
         // P1: Reject client-controlled review / hint fields.
         // These directly drive XP / quest bonus computation in

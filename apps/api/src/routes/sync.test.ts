@@ -31,6 +31,24 @@ function makeAttempt(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * Seed a curriculum-resolvable question matching the attempt so the
+ * server-side reject-unknown-questionId guard accepts the payload.
+ */
+function seedQuestionFromAttempt(attempt: { questionId: string; answerSubmitted: string }) {
+  inMemoryState.dynamicQuestions.push({
+    id: attempt.questionId,
+    lessonId: 'test-lesson',
+    prompt: attempt.questionId,
+    type: 'TEXT_SHORT',
+    answers: [attempt.answerSubmitted],
+    options: [],
+    explanation: '',
+    hints: [],
+    createdAt: new Date().toISOString(),
+  } as any);
+}
+
 describe('POST /api/sync/batch', () => {
   beforeEach(() => {
     inMemoryState.reset();
@@ -42,6 +60,7 @@ describe('POST /api/sync/batch', () => {
     const token = makeToken(TEST_USER_ID);
     const clientEventId = crypto.randomUUID();
     const attempt = makeAttempt({ clientEventId });
+    seedQuestionFromAttempt(attempt);
 
     const body = {
       attempts: [attempt],
@@ -74,12 +93,14 @@ describe('POST /api/sync/batch', () => {
   // D-2: Server recalculates XP from all attempts
   it('recalculates user stats server-side (D-2)', async () => {
     const token = makeToken(TEST_USER_ID);
+    const attempt = makeAttempt();
+    seedQuestionFromAttempt(attempt);
 
     const res = await request(app)
       .post('/api/sync/batch')
       .set('Authorization', `Bearer ${token}`)
       .send({
-        attempts: [makeAttempt()],
+        attempts: [attempt],
         schemaVersion: 1,
         deviceId: 'test-device',
       });
