@@ -38,12 +38,23 @@ router.post('/batch', authMiddleware, async (req, res) => {
 
     const { attempts, schemaVersion, deviceId } = parsed.data;
 
-    // D-6: Check client schema version compatibility
-    if (schemaVersion < MIN_CLIENT_SCHEMA_VERSION) {
+    // D-6: Check client schema version compatibility (both directions).
+    // - Below MIN: the client is too old; tell it to update.
+    // - Above the server's current OFFLINE_SCHEMA_VERSION: the client is
+    //   NEWER than this server (staged deploy / rollback). Zod would silently
+    //   strip unknown fields and we could persist misinterpreted attempts, so
+    //   reject and have the client hold its local data until the server
+    //   catches up.
+    if (
+      schemaVersion < MIN_CLIENT_SCHEMA_VERSION ||
+      schemaVersion > OFFLINE_SCHEMA_VERSION
+    ) {
       res.status(409).json({
         error: 'schema_version_mismatch',
         message:
-          '最新版に更新してください。オフラインデータはローカルに保持されています。',
+          schemaVersion > OFFLINE_SCHEMA_VERSION
+            ? 'サーバーの更新をお待ちください。オフラインデータはローカルに保持されています。'
+            : '最新版に更新してください。オフラインデータはローカルに保持されています。',
         serverVersion: OFFLINE_SCHEMA_VERSION,
         minClientVersion: MIN_CLIENT_SCHEMA_VERSION,
       });

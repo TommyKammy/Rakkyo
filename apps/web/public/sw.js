@@ -104,67 +104,68 @@ self.addEventListener('push', (event) => {
     const payload = event.data.json();
 
     if (payload.command === 'WIPE_LOCAL_DB') {
+      // P2: Persist a durable "wipe-required" marker FIRST, regardless of
+      // whether a client window is open. The active-client branch only posts
+      // a message; if the controlled tab misses it (listener not yet
+      // registered, navigating, etc.) the wipe would silently never complete.
+      // The cold-start drain (drainPendingRemoteWipe) finishes the job using
+      // this flag. localStorage isn't available from a SW thread, so we use a
+      // dedicated IDB store.
+      const persistWipeFlag = () => {
+        return new Promise((resolve) => {
+          const req = indexedDB.open('rakkyo-wipe-flags', 1);
+          req.onupgradeneeded = () => {
+            const upgradeDb = req.result;
+            if (!upgradeDb.objectStoreNames.contains('flags')) {
+              upgradeDb.createObjectStore('flags');
+            }
+          };
+          req.onsuccess = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains('flags')) {
+              db.close();
+              resolve();
+              return;
+            }
+            try {
+              const tx = db.transaction('flags', 'readwrite');
+              tx.objectStore('flags').put(
+                { userId: payload.userId, requestedAt: Date.now() },
+                `wipe_${payload.userId}`
+              );
+              tx.oncomplete = () => {
+                db.close();
+                resolve();
+              };
+              tx.onerror = () => {
+                db.close();
+                resolve();
+              };
+            } catch {
+              db.close();
+              resolve();
+            }
+          };
+          req.onerror = () => resolve();
+        });
+      };
+
       event.waitUntil(
         self.clients.matchAll().then((clients) => {
           if (clients && clients.length > 0) {
             // Active tabs are open — notify them so they reload & logout
+            // immediately, but ALSO persist the durable flag so a missed
+            // message is still completed at the next cold start.
             clients.forEach((client) => {
               client.postMessage({
                 type: 'WIPE_LOCAL_DB',
                 userId: payload.userId,
               });
             });
-            return Promise.resolve();
+            return persistWipeFlag();
           } else {
             // No client windows are open — execute direct wipe from SW thread (P1-6)
             const filename = `rakkyo_user_${payload.userId}.db`;
-
-            // P2: Persist a "wipe-required" marker so the next cold start can
-            // also clear localStorage (rakkyo_token / rakkyo_user) and force
-            // a login. Without this, deleting OPFS + IDB key from the SW
-            // would leave the auth token intact in localStorage — the next
-            // app open would silently continue as if logged in until some
-            // unrelated 401 happened. We use a dedicated IDB store rather
-            // than localStorage because localStorage isn't available from a
-            // SW thread.
-            const persistWipeFlag = () => {
-              return new Promise((resolve) => {
-                const req = indexedDB.open('rakkyo-wipe-flags', 1);
-                req.onupgradeneeded = () => {
-                  const upgradeDb = req.result;
-                  if (!upgradeDb.objectStoreNames.contains('flags')) {
-                    upgradeDb.createObjectStore('flags');
-                  }
-                };
-                req.onsuccess = () => {
-                  const db = req.result;
-                  if (!db.objectStoreNames.contains('flags')) {
-                    db.close();
-                    resolve();
-                    return;
-                  }
-                  try {
-                    const tx = db.transaction('flags', 'readwrite');
-                    tx.objectStore('flags').put(
-                      { userId: payload.userId, requestedAt: Date.now() },
-                      `wipe_${payload.userId}`
-                    );
-                    tx.oncomplete = () => {
-                      db.close();
-                      resolve();
-                    };
-                    tx.onerror = () => {
-                      db.close();
-                      resolve();
-                    };
-                  } catch {
-                    db.close();
-                    resolve();
-                  }
-                };
-                req.onerror = () => resolve();
-              });
-            };
 
             // 1. Delete OPFS file
             const deleteOpfs = () => {

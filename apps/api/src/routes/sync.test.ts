@@ -142,6 +142,26 @@ describe('POST /api/sync/batch', () => {
     expect(res.status).toBe(400);
   });
 
+  // P2: schemaVersion newer than the server's must be rejected with 409 so
+  // the client holds local data until the server catches up.
+  it('rejects schema version newer than server with 409 (P2)', async () => {
+    const token = makeToken(TEST_USER_ID);
+    const attempt = makeAttempt();
+    seedQuestionFromAttempt(attempt);
+
+    const res = await request(app)
+      .post('/api/sync/batch')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        attempts: [attempt],
+        schemaVersion: 999,
+        deviceId: 'test-device',
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('schema_version_mismatch');
+  });
+
   // Unauthenticated request returns 401
   it('rejects unauthenticated requests with 401', async () => {
     const res = await request(app)

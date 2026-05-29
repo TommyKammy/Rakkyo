@@ -236,6 +236,18 @@ export class SyncService {
     // D-2: Recalculate from full Attempt history (server = single source of truth)
     const stats = await this.syncRepo.recalculateUserStats(userId);
 
+    // P2: Award badges from the reconciled attempt history. recalculateUserStats
+    // only writes XP/level/streak, so thresholds crossed entirely offline
+    // (e.g. 5 correct answers, 3-day streak) would otherwise never award their
+    // badge until a later online submission happened to re-check. Mirror the
+    // /lessons/submit badge logic here. Best-effort: a badge failure must not
+    // fail the whole sync batch.
+    try {
+      await this.reconcileBadges(userId, stats);
+    } catch (err) {
+      console.error('Failed to reconcile badges during offline sync:', err);
+    }
+
     // Record sync in audit log
     const createdCount = results.filter((r) => r.status === 'created').length;
     const failedCount = results.filter((r) => r.status === 'rejected').length;
@@ -260,5 +272,84 @@ export class SyncService {
       serverStats: stats,
       syncedAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Award achievement badges from the user's full attempt history after an
+   * offline sync (P2). This mirrors the badge logic in /api/lessons/submit
+   * (apps/api/src/routes/lessons/attempts.ts) so offline-earned thresholds
+   * are not lost. addUserBadge is idempotent (unique (userId, badgeId) +
+   * existence check), so re-running across syncs is safe.
+   *
+   * @param userId - The user to reconcile badges for
+   * @param stats - The freshly recomputed XP / level / streak aggregates
+   */
+  private async reconcileBadges(
+    userId: string,
+    stats: { currentXp: number; level: number; streakCount: number }
+  ): Promise<void> {
+    const attempts = await this.attemptRepo.findAttemptsByUser(userId);
+    const earned = await this.attemptRepo.getUserBadges(userId);
+    const has = (name: string) => earned.some((b) => b.includes(name));
+
+    const correctCount = attempts.filter((a: any) => a.isCorrect).length;
+    const gritAttempts = attempts.filter((a: any) => a.hintsUsed >= 1);
+    const gritSuccess = gritAttempts.filter((a: any) => a.isCorrect);
+    const gritScore =
+      gritAttempts.length > 0
+        ? Math.round((gritSuccess.length / gritAttempts.length) * 100)
+        : 0;
+    const totalDurationSeconds = attempts.reduce(
+      (sum: number, a: any) => sum + (a.durationSeconds || 0),
+      0
+    );
+
+    // Longest run of consecutive correct answers (chronological order).
+    const sorted = [...attempts].sort(
+      (a: any, b: any) =>
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+    let consecutive = 0;
+    let maxConsecutive = 0;
+    for (const a of sorted) {
+      if (a.isCorrect) {
+        consecutive++;
+        if (consecutive > maxConsecutive) maxConsecutive = consecutive;
+      } else {
+        consecutive = 0;
+      }
+    }
+
+    const toAward: string[] = [];
+    if ((stats.currentXp > 0 || stats.level > 1) && !has('冒険のはじまり')) {
+      toAward.push('冒険のはじまり');
+    }
+    if (stats.streakCount >= 3 && !has('あきらめない心')) {
+      toAward.push('あきらめない心');
+    }
+    if (correctCount >= 5 && !has('数学マスターの卵')) {
+      toAward.push('数学マスターの卵');
+    }
+    if (
+      attempts.length >= 5 &&
+      gritAttempts.length >= 1 &&
+      gritScore >= 90 &&
+      !has('Gritの達人')
+    ) {
+      toAward.push('Gritの達人');
+    }
+    if (totalDurationSeconds >= 36000 && !has('無限の探求者')) {
+      toAward.push('無限の探求者');
+    }
+    if (stats.streakCount >= 7 && !has('ストリークの鬼')) {
+      toAward.push('ストリークの鬼');
+    }
+    if (maxConsecutive >= 10 && !has('完璧主義者')) {
+      toAward.push('完璧主義者');
+    }
+
+    for (const name of toAward) {
+      await this.attemptRepo.addUserBadge(userId, name);
+    }
   }
 }

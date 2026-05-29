@@ -742,28 +742,33 @@ function ExerciseScreenContent() {
     const fallbackAttemptId = "attempt_fallback_" + Date.now();
     setLatestAttemptId(fallbackAttemptId);
 
-    // Enqueue the pending attempt to SQLite for later sync (P1-7)
-    import('@/lib/offline/db').then(async ({ openUserDb }) => {
-      try {
-        const db = await openUserDb(user.id);
-        const { enqueuePendingAttempt } = await import('@/lib/offline/sync-engine');
-        const localId = await enqueuePendingAttempt(db, {
-          userId: user.id,
-          questionId: currentQuestion.id || currentQuestion.prompt,
-          isCorrect: isAnsCorrect,
-          hintsUsed,
-          answerSubmitted: submitted,
-          durationSeconds,
-          errorType: isAnsCorrect ? null : "incorrect",
-          isReview: isReview,
-          createdAt: new Date().toISOString(),
-        });
-        console.log("Successfully enqueued pending offline attempt:", localId);
-        window.dispatchEvent(new CustomEvent('rakkyo-offline-attempt-enqueued'));
-      } catch (e) {
-        console.error("Failed to enqueue offline attempt:", e);
-      }
-    });
+    // Enqueue the pending attempt to SQLite for later sync (P1-7).
+    // P2: Await the durable insert BEFORE awarding XP / advancing the UI.
+    // Previously this ran as a detached promise, so if the learner closed
+    // the PWA or navigated during the sqlite-wasm load / OPFS open /
+    // encryption window, the UI had already accepted and awarded the answer
+    // but the row was never written to offline_attempts and could never be
+    // synced. Awaiting guarantees durability before we acknowledge.
+    try {
+      const { openUserDb } = await import('@/lib/offline/db');
+      const { enqueuePendingAttempt } = await import('@/lib/offline/sync-engine');
+      const db = await openUserDb(user.id);
+      const localId = await enqueuePendingAttempt(db, {
+        userId: user.id,
+        questionId: currentQuestion.id || currentQuestion.prompt,
+        isCorrect: isAnsCorrect,
+        hintsUsed,
+        answerSubmitted: submitted,
+        durationSeconds,
+        errorType: isAnsCorrect ? null : "incorrect",
+        isReview: isReview,
+        createdAt: new Date().toISOString(),
+      });
+      console.log("Successfully enqueued pending offline attempt:", localId);
+      window.dispatchEvent(new CustomEvent('rakkyo-offline-attempt-enqueued'));
+    } catch (e) {
+      console.error("Failed to enqueue offline attempt:", e);
+    }
 
     if (isAnsCorrect) {
       setMascotEmotion('correct');

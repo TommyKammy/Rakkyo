@@ -402,6 +402,55 @@ describe('SyncService', () => {
     ).toBeUndefined();
   });
 
+  // P2 regression: badges crossed entirely offline are awarded on reconciliation.
+  it('awards badges from offline-synced attempt history (P2)', async () => {
+    const userId = 'badge-test-student';
+    // Fresh user with no badges and no prior attempts.
+    inMemoryState.users.push({
+      id: userId,
+      tenantId: 'test-tenant-id',
+      email: 'badge@rakkyo.com',
+      passwordHash: 'x',
+      nickname: 'Badge Tester',
+      role: 'STUDENT',
+      schoolYear: 1,
+      currentXp: 0,
+      level: 1,
+      streakCount: 0,
+      lastActiveDate: null,
+      parentalConsent: true,
+      aiHintCountToday: 0,
+      lastAiHintDate: null,
+      abuseCount: 0,
+      abuseLastAt: null,
+      lockedUntil: null,
+      badges: [],
+      speechAnalyticsConsent: false,
+      speechAnalysisEnabled: true,
+      createdAt: new Date().toISOString(),
+    } as any);
+
+    // 5 distinct correct answers → "5 correct" + "first adventure" badges.
+    const batch = Array.from({ length: 5 }, (_, i) => {
+      seedQuestion(`q-badge-${i}`, `ans-${i}`);
+      return {
+        clientEventId: crypto.randomUUID(),
+        userId,
+        questionId: `q-badge-${i}`,
+        isCorrect: true,
+        hintsUsed: 0,
+        answerSubmitted: `ans-${i}`,
+        createdAt: new Date(Date.now() - (5 - i) * 60000).toISOString(),
+      };
+    });
+
+    await service.processBatch(userId, batch, 'dev-badge');
+
+    const user = inMemoryState.users.find((u) => u.id === userId);
+    expect(user?.badges).toContain('冒険のはじまり');
+    expect(user?.badges).toContain('数学マスターの卵');
+  });
+
   // Sync log is recorded for each batch
   it('records sync log for each batch', async () => {
     const userId = 'test-student-id';
