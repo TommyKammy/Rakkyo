@@ -141,12 +141,27 @@ router.get('/hints/:lessonId', authMiddleware, async (req, res) => {
       return;
     }
 
+    // P2: Emit each question's hints under BOTH its prompt and its id. The web
+    // client looks up cached hints by `question.id || question.prompt`, which
+    // is the prompt for id-less static (e.g. math) questions even though the
+    // DB row's id is a generated UUID. Keying by both means the client's
+    // lookup hits regardless of which identifier it holds.
+    const seenKeys = new Set<string>();
+    const hintEntries: { questionId: string; hints: string[] }[] = [];
+    for (const q of questions) {
+      const keys = [q.prompt, q.id].filter(
+        (k): k is string => typeof k === 'string' && k.length > 0
+      );
+      for (const key of keys) {
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        hintEntries.push({ questionId: key, hints: q.hints || [] });
+      }
+    }
+
     res.json({
       lessonId,
-      questions: questions.map((q) => ({
-        questionId: q.id,
-        hints: q.hints || [],
-      })),
+      questions: hintEntries,
     });
   } catch (error) {
     console.error('Hint prefetch error:', error);

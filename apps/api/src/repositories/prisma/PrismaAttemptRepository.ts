@@ -1,6 +1,7 @@
 import { AttemptRepository } from '../AttemptRepository';
 import { Attempt } from '@prisma/client';
 import prisma from '../../db';
+import { resolveCanonicalQuestionId } from './resolveQuestionId';
 
 export class PrismaAttemptRepository implements AttemptRepository {
   async createAttempt(data: {
@@ -14,10 +15,14 @@ export class PrismaAttemptRepository implements AttemptRepository {
     aiDiagnosis?: string | null;
     isReview?: boolean | null;
   }): Promise<Attempt> {
+    // P1: Resolve a prompt-style identifier to the canonical Question.id so
+    // the FK is valid in production. Keeps this online path consistent with
+    // the offline sync path (issue #15).
+    const questionId = await resolveCanonicalQuestionId(data.questionId);
     return prisma.attempt.create({
       data: {
         userId: data.userId,
-        questionId: data.questionId,
+        questionId,
         isCorrect: data.isCorrect,
         hintsUsed: data.hintsUsed,
         answerSubmitted: data.answerSubmitted,
@@ -39,8 +44,11 @@ export class PrismaAttemptRepository implements AttemptRepository {
   }
 
   async findAttemptsByQuestion(userId: string, questionId: string): Promise<Attempt[]> {
+    // P1: Resolve to the canonical id so grit / isReview lookups match
+    // attempts that were stored under the canonical Question.id.
+    const canonicalId = await resolveCanonicalQuestionId(questionId);
     return prisma.attempt.findMany({
-      where: { userId, questionId },
+      where: { userId, questionId: canonicalId },
       orderBy: { createdAt: 'desc' }
     });
   }

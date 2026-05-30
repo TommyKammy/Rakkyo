@@ -195,6 +195,10 @@ export class PrismaCurriculumRepository implements CurriculumRepository {
           if (lesson.name === lessonIdOrName) {
             staticQs.push(...lesson.questions.map(q => ({
               id: q.id || q.prompt,
+              // P2: carry the prompt so the hints route can also expose a
+              // prompt-keyed cache entry (the client looks up by prompt for
+              // id-less static questions).
+              prompt: q.prompt,
               hints: q.hints || []
             })));
           }

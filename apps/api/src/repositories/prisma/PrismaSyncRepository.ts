@@ -1,6 +1,7 @@
 import { SyncRepository } from '../SyncRepository';
 import prisma from '../../db';
 import { withPrismaRetry } from '../../utils/prismaRetry';
+import { resolveCanonicalQuestionId } from './resolveQuestionId';
 
 /** XP earned per correct answer. */
 const XP_PER_CORRECT = 10;
@@ -43,11 +44,16 @@ export class PrismaSyncRepository implements SyncRepository {
       };
     }
 
+    // P1: Resolve a prompt-style identifier to the canonical Question.id so
+    // the FK is valid in production. Mirrors the online createAttempt path so
+    // both persist the same id (issue #15 — avoids split-brain grouping).
+    const canonicalQuestionId = await resolveCanonicalQuestionId(data.questionId);
+
     try {
       const created = await prisma.attempt.create({
         data: {
           userId: data.userId,
-          questionId: data.questionId,
+          questionId: canonicalQuestionId,
           isCorrect: data.isCorrect,
           hintsUsed: data.hintsUsed,
           answerSubmitted: data.answerSubmitted,

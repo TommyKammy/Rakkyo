@@ -100,9 +100,12 @@ export async function drainPendingRemoteWipe(): Promise<string | null> {
         return;
       }
       try {
-        const tx = db.transaction('flags', 'readwrite');
-        const store = tx.objectStore('flags');
-        const getAllKeysReq = store.getAllKeys();
+        // Read the pending wipe key first (readonly) — do NOT delete the flag
+        // yet (P2): the durable flag must survive until the actual local-data
+        // deletion succeeds, so a transient failure (e.g. another tab still
+        // holds the OPFS DB) is retried on the next cold start.
+        const readTx = db.transaction('flags', 'readonly');
+        const getAllKeysReq = readTx.objectStore('flags').getAllKeys();
         getAllKeysReq.onsuccess = () => {
           const keys = getAllKeysReq.result as string[];
           const wipeKey = keys.find((k) => k.startsWith('wipe_'));
@@ -113,7 +116,7 @@ export async function drainPendingRemoteWipe(): Promise<string | null> {
           }
           const userId = wipeKey.slice('wipe_'.length);
           // Forcibly clear auth/session state so the next page render
-          // routes the user back to login.
+          // routes the user back to login. This is always safe to do.
           try {
             localStorage.removeItem(MOUNTED_USER_KEY);
             localStorage.removeItem('rakkyo_token');
@@ -121,22 +124,34 @@ export async function drainPendingRemoteWipe(): Promise<string | null> {
           } catch {
             // localStorage may be unavailable in some private modes; ignore
           }
-          store.delete(wipeKey);
 
-          // P2: After the flag transaction settles, complete the actual local
-          // data wipe (OPFS DB + AES-GCM key). This guarantees the remote wipe
-          // removes encrypted attempts + key even when an open tab missed the
-          // WIPE_LOCAL_DB message. Run on both complete and error so a flag-tx
-          // failure can't leave the data behind. Best-effort (errors ignored).
-          const finishWipe = () => {
-            db.close();
-            Promise.all([
-              deleteUserOpfsDb(userId).catch(() => {}),
-              deleteKey(`enc_${userId}`).catch(() => {}),
-            ]).finally(() => resolve(userId));
-          };
-          tx.oncomplete = finishWipe;
-          tx.onerror = finishWipe;
+          // Perform the actual local-data wipe. Only clear the durable flag
+          // once BOTH deletions succeed; otherwise keep it so the next cold
+          // start retries the server-issued wipe.
+          Promise.all([
+            deleteUserOpfsDb(userId),
+            deleteKey(`enc_${userId}`),
+          ])
+            .then(() => {
+              const delTx = db.transaction('flags', 'readwrite');
+              delTx.objectStore('flags').delete(wipeKey);
+              const done = () => {
+                db.close();
+                resolve(userId);
+              };
+              delTx.oncomplete = done;
+              delTx.onerror = done;
+            })
+            .catch((err) => {
+              // Deletion failed transiently — leave the flag in place so the
+              // wipe is retried next time. Session is already cleared above.
+              console.warn(
+                '⚠️ Remote wipe local deletion failed; keeping flag for retry.',
+                err
+              );
+              db.close();
+              resolve(userId);
+            });
         };
         getAllKeysReq.onerror = () => {
           db.close();

@@ -262,8 +262,22 @@ export async function flushPendingAttempts(
           };
         }
 
+        // P2: A 400 means the payload failed server-side validation
+        // (e.g. durationSeconds > 7200 from a tab left open >2h, or
+        // answerSubmitted > 5000 chars). That can never be accepted on
+        // retry, so mark it terminal (REJECTED) instead of looping forever
+        // and keeping the pending badge lit.
+        if (response.status === 400) {
+          db.exec(
+            `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
+            [SYNC_STATUS.REJECTED, p.clientEventId]
+          );
+          totalRejected++;
+          continue;
+        }
+
         if (!response.ok) {
-          // Server/Network error for this attempt — revert to PENDING for retry later
+          // Other server/network error for this attempt — revert to PENDING for retry later
           db.exec(
             `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
             [SYNC_STATUS.PENDING, p.clientEventId]
