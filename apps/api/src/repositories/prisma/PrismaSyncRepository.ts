@@ -90,6 +90,17 @@ export class PrismaSyncRepository implements SyncRepository {
   }
 
   /** @inheritdoc */
+  async findAttemptByClientEventId(
+    clientEventId: string
+  ): Promise<{ id: string } | null> {
+    const existing = await prisma.attempt.findUnique({
+      where: { clientEventId },
+      select: { id: true },
+    });
+    return existing ? { id: existing.id } : null;
+  }
+
+  /** @inheritdoc */
   async createSyncLog(data: {
     userId: string;
     deviceId: string;

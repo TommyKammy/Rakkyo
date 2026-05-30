@@ -89,6 +89,16 @@ export class InMemorySyncRepository implements SyncRepository {
   }
 
   /** @inheritdoc */
+  async findAttemptByClientEventId(
+    clientEventId: string
+  ): Promise<{ id: string } | null> {
+    const existing = inMemoryState.attempts.find(
+      (a) => a.clientEventId === clientEventId
+    );
+    return existing ? { id: existing.id } : null;
+  }
+
+  /** @inheritdoc */
   async createSyncLog(data: {
     userId: string;
     deviceId: string;

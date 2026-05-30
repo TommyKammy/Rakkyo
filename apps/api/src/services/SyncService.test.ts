@@ -523,6 +523,84 @@ describe('SyncService', () => {
     expect(user?.badges).toContain('数学マスターの卵');
   });
 
+  // P2 regression: a re-sent attempt already persisted on the server must be
+  // reported as duplicate even if it now falls outside the 30-day window
+  // (idempotency check must run before the timestamp guard).
+  it('returns duplicate (not permanent reject) for an already-persisted attempt past the age window (P2)', async () => {
+    const userId = 'test-student-id';
+    const questionId = 'q-late-dup';
+    seedQuestion(questionId, 'ok');
+    const eventId = crypto.randomUUID();
+
+    // First sync within the window → created.
+    const first = await service.processBatch(
+      userId,
+      [
+        {
+          clientEventId: eventId,
+          userId,
+          questionId,
+          isCorrect: true,
+          hintsUsed: 0,
+          answerSubmitted: 'ok',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      'dev-late-1'
+    );
+    expect(first.results[0].status).toBe('created');
+
+    // Re-send the SAME clientEventId but now with a createdAt older than the
+    // 30-day window (simulating a lost response + much-later retry).
+    const longAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const second = await service.processBatch(
+      userId,
+      [
+        {
+          clientEventId: eventId,
+          userId,
+          questionId,
+          isCorrect: true,
+          hintsUsed: 0,
+          answerSubmitted: 'ok',
+          createdAt: longAgo,
+        },
+      ],
+      'dev-late-2'
+    );
+    expect(second.results[0].status).toBe('duplicate');
+    expect(second.results[0].permanent).toBeUndefined();
+  });
+
+  // P2 regression: a transient DB lookup failure must NOT be a permanent reject.
+  it('treats a curriculum lookup failure as transient (non-permanent) reject (P2)', async () => {
+    const userId = 'test-student-id';
+    // Force findQuestionById to throw to simulate a DB outage.
+    jest
+      .spyOn(curriculumRepo, 'findQuestionById')
+      .mockRejectedValueOnce(new Error('DB connection lost'));
+
+    const result = await service.processBatch(
+      userId,
+      [
+        {
+          clientEventId: crypto.randomUUID(),
+          userId,
+          questionId: 'q-db-only',
+          isCorrect: true,
+          hintsUsed: 0,
+          answerSubmitted: 'whatever',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      'dev-dberr'
+    );
+
+    expect(result.results[0].status).toBe('rejected');
+    // Must stay retryable — a transient outage is not a permanent rejection.
+    expect(result.results[0].permanent).toBeUndefined();
+  });
+
   // Sync log is recorded for each batch
   it('records sync log for each batch', async () => {
     const userId = 'test-student-id';

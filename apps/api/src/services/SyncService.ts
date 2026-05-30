@@ -105,6 +105,24 @@ export class SyncService {
     let isFirst = true;
     for (const attempt of sortedAttempts) {
       try {
+        // P2: Idempotency check FIRST — before the throttle and the timestamp
+        // window. An attempt already persisted on the server (e.g. its sync
+        // response was lost) might be re-sent after the 30-day window; without
+        // this short-circuit the age guard below would permanently reject a
+        // row that actually succeeded, and the client would mark its local
+        // copy REJECTED. Returning `duplicate` lets the client mark it SYNCED.
+        const alreadyPersisted = await this.syncRepo.findAttemptByClientEventId(
+          attempt.clientEventId
+        );
+        if (alreadyPersisted) {
+          results.push({
+            clientEventId: attempt.clientEventId,
+            status: 'duplicate',
+            serverId: alreadyPersisted.id,
+          });
+          continue;
+        }
+
         if (!isFirst && process.env.NODE_ENV !== 'test') {
           // D-7: Throttle database update attempts (1 entry/sec) to prevent load/abuse bursts (P2-11)
           await new Promise((resolve) => setTimeout(resolve, SYNC_RATE_LIMIT_MS));

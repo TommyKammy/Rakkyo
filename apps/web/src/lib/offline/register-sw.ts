@@ -111,25 +111,29 @@ export async function requestBackgroundSync(
 }
 
 /**
- * Run the immediate-sync fallback while serializing across tabs.
+ * Run a sync flush while serializing across tabs via a Web Lock.
  *
- * P2: On browsers without the Background Sync API every open tab would
- * otherwise launch its own `flushPendingAttempts()` simultaneously (the
- * per-tab `isSyncingRef` only guards within a single tab), reintroducing
- * concurrent queue processing and duplicate uploads despite the
- * service-worker-side single-client fix. Wrap the trigger in a Web Locks
- * acquisition with `ifAvailable: true` so only the first tab to grab the
- * lock proceeds; others see `null` and skip — whichever tab wins flushes
- * the shared OPFS queue on behalf of all peers.
+ * P2: Every open tab can otherwise launch its own `flushPendingAttempts()`
+ * simultaneously (the per-tab `isSyncingRef` only guards within a single tab),
+ * reintroducing concurrent queue processing and duplicate uploads despite the
+ * service-worker-side single-client fix. Acquiring `CROSS_TAB_SYNC_LOCK` with
+ * `ifAvailable: true` means only the first tab to grab the lock proceeds;
+ * others see `null` and skip — whichever tab wins flushes the shared OPFS
+ * queue on behalf of all peers. Browsers without the Web Locks API fall back
+ * to a direct call (best-effort coordination).
+ *
+ * Exposed so non-SW code paths (e.g. the startup auto-flush in
+ * OfflineProviderWrapper) can share the exact same cross-tab coordination.
+ *
+ * @param fn - The flush routine to run under the lock (e.g. handleSyncTrigger)
  */
-async function runImmediateSyncFallback(): Promise<void> {
-  if (!activeSyncTrigger) return;
-
+export async function runWithCrossTabSyncLock(
+  fn: () => void | Promise<void>
+): Promise<void> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
   if (!locks || typeof locks.request !== 'function') {
-    // No Web Locks API support (older Safari etc.) — fall back to direct call.
-    // Cross-tab coordination is best-effort in that environment.
-    await activeSyncTrigger();
+    // No Web Locks API support (older Safari etc.) — best-effort direct call.
+    await fn();
     return;
   }
 
@@ -141,7 +145,16 @@ async function runImmediateSyncFallback(): Promise<void> {
         // Another tab is already flushing the shared queue — skip.
         return;
       }
-      await activeSyncTrigger?.();
+      await fn();
     }
   );
+}
+
+/**
+ * Run the immediate-sync fallback for browsers without the Background Sync API.
+ * Shares the cross-tab Web Lock so multiple tabs don't flush concurrently.
+ */
+async function runImmediateSyncFallback(): Promise<void> {
+  if (!activeSyncTrigger) return;
+  await runWithCrossTabSyncLock(() => activeSyncTrigger?.());
 }

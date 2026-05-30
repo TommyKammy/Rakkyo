@@ -5,6 +5,7 @@ import { OfflineIndicator } from './OfflineIndicator';
 import {
   registerServiceWorker,
   requestBackgroundSync,
+  runWithCrossTabSyncLock,
 } from '@/lib/offline/register-sw';
 import { handleLogout, drainPendingRemoteWipe } from '@/lib/offline/user-isolation';
 
@@ -128,7 +129,11 @@ export function OfflineProviderWrapper() {
                 const count = getPendingCount(db);
                 setPendingCount(count);
                 if (count > 0 && navigator.onLine) {
-                  handleSyncTrigger();
+                  // P2: Route the startup flush through the cross-tab Web Lock
+                  // so multiple tabs opened with a pending queue don't launch
+                  // concurrent flushes against the same OPFS rows (the
+                  // tab-local isSyncingRef alone can't coordinate across tabs).
+                  runWithCrossTabSyncLock(handleSyncTrigger);
                 }
               });
             });

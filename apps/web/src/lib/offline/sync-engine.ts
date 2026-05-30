@@ -85,9 +85,16 @@ export async function enqueuePendingAttempt(
  * @param db - The user's OfflineDb handle
  */
 export function getPendingCount(db: OfflineDb): number {
+  // Include SYNCING so a queue containing only crash-interrupted in-flight
+  // rows (the app closed between marking SYNCING and the reset) still reports
+  // a positive count. Otherwise the startup auto-flush — which only runs when
+  // the count is > 0 — would never fire to reset/retry those rows until the
+  // user happened to create a new attempt (P2). REJECTED is terminal and
+  // intentionally excluded so its badge can clear.
   const row = db.selectOne<{ cnt: number }>(
-    `SELECT COUNT(*) as cnt FROM offline_attempts WHERE syncStatus = ? OR syncStatus = ?`,
-    [SYNC_STATUS.PENDING, SYNC_STATUS.FAILED]
+    `SELECT COUNT(*) as cnt FROM offline_attempts
+       WHERE syncStatus = ? OR syncStatus = ? OR syncStatus = ?`,
+    [SYNC_STATUS.PENDING, SYNC_STATUS.FAILED, SYNC_STATUS.SYNCING]
   );
   return row?.cnt ?? 0;
 }

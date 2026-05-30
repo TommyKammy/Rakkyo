@@ -24,6 +24,18 @@ export interface SyncRepository {
   }): Promise<{ created: boolean; attempt: { id: string; clientEventId: string } }>;
 
   /**
+   * Look up an already-persisted attempt by its idempotency key (D-1).
+   * Used to short-circuit re-sent attempts (e.g. a successful write whose
+   * response was lost) BEFORE applying the timestamp window, so a late retry
+   * is reported as `duplicate` rather than spuriously rejected.
+   * @param clientEventId - The client-generated idempotency key
+   * @returns The existing attempt id, or null if not found
+   */
+  findAttemptByClientEventId(
+    clientEventId: string
+  ): Promise<{ id: string } | null>;
+
+  /**
    * Record a sync operation in the audit log.
    * @param data - Sync log metadata
    */

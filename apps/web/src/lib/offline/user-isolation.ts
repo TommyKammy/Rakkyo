@@ -50,16 +50,22 @@ export async function mountUserDb(userId: string) {
  * @param userId - The user ID to wipe local data for
  */
 export async function handleLogout(userId: string): Promise<void> {
-  // 1. Close and delete the OPFS database file
-  await deleteUserOpfsDb(userId);
-
-  // 2. Delete the encryption key (D-8)
-  await deleteKey(`enc_${userId}`);
-
-  // 3. Clear the mounted user marker and session storage (P1)
-  localStorage.removeItem(MOUNTED_USER_KEY);
-  localStorage.removeItem('rakkyo_token');
-  localStorage.removeItem('rakkyo_user');
+  // P2: Session clearing MUST happen even if local-data deletion throws
+  // (e.g. IndexedDB unavailable or a malformed key store). Otherwise a
+  // remote-wipe handler that catches the error without reloading would leave
+  // the tab authenticated. Treat OPFS/key deletion as best-effort and always
+  // clear the session in `finally`.
+  try {
+    // 1. Close and delete the OPFS database file
+    await deleteUserOpfsDb(userId);
+    // 2. Delete the encryption key (D-8)
+    await deleteKey(`enc_${userId}`);
+  } finally {
+    // 3. Clear the mounted user marker and session storage (P1)
+    localStorage.removeItem(MOUNTED_USER_KEY);
+    localStorage.removeItem('rakkyo_token');
+    localStorage.removeItem('rakkyo_user');
+  }
 }
 
 /**
