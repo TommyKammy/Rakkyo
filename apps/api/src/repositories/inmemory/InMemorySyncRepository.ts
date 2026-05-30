@@ -147,6 +147,9 @@ export class InMemorySyncRepository implements SyncRepository {
     let currentStreak = 0;
     let lastActiveStr: string | null = null;
     const questionMissedOrHinted = new Map<string, boolean>();
+    // P2: Derive review status from history (see PrismaSyncRepository for the
+    // full rationale) — robust to the isReview column's default-false migration.
+    const answeredCorrectlyBefore = new Set<string>();
 
     for (const dayStr of sortedDays) {
       // 1. Update streak day-by-day
@@ -179,8 +182,11 @@ export class InMemorySyncRepository implements SyncRepository {
         
         // O(1) Check Grit retry bonus
         const isGritBonus = isCorrect && !!questionMissedOrHinted.get(a.questionId);
-        
-        const xpAwarded = isCorrect ? (isGritBonus ? 30 : (a.isReview ? 25 : 10)) : 0;
+
+        // Derived review: correct answer to a previously-correct question.
+        const effectiveIsReview = answeredCorrectlyBefore.has(a.questionId);
+
+        const xpAwarded = isCorrect ? (isGritBonus ? 30 : (effectiveIsReview ? 25 : 10)) : 0;
         let questXp = 0;
 
         if (!adventureCompleted && attemptsCountToday >= 3) {
@@ -204,9 +210,12 @@ export class InMemorySyncRepository implements SyncRepository {
           xpNeeded = currentLevel * 100;
         }
 
-        // Update tracking map for future attempts on this question
+        // Update tracking maps for future attempts on this question
         if (!isCorrect || a.hintsUsed >= 2) {
           questionMissedOrHinted.set(a.questionId, true);
+        }
+        if (isCorrect) {
+          answeredCorrectlyBefore.add(a.questionId);
         }
       }
     }
@@ -221,8 +230,6 @@ export class InMemorySyncRepository implements SyncRepository {
         user.lastActiveDate = new Date(lastActiveStr).toISOString();
       }
     }
-
-    return { currentXp, level: currentLevel, streakCount: currentStreak };
 
     return { currentXp, level: currentLevel, streakCount: currentStreak };
   }

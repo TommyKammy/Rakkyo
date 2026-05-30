@@ -768,6 +768,15 @@ function ExerciseScreenContent() {
       window.dispatchEvent(new CustomEvent('rakkyo-offline-attempt-enqueued'));
     } catch (e) {
       console.error("Failed to enqueue offline attempt:", e);
+      // P1: The attempt was NOT durably written (sqlite-wasm load / OPFS /
+      // crypto-key failure). Do NOT award optimistic XP for work that can
+      // never be synced. Roll the answer-check UI back so the learner can
+      // retry, surface a friendly message, and stop here.
+      setIsChecked(false);
+      setIsCorrect(false);
+      setMascotEmotion('incorrect');
+      speak("ごめんね、答えをうまく保存できなかったみたい。もう一度ためしてね。", "neutral");
+      return;
     }
 
     if (isAnsCorrect) {

@@ -49,7 +49,15 @@ export const SYNC_STATUS = {
   PENDING: 'PENDING',
   SYNCING: 'SYNCING',
   SYNCED: 'SYNCED',
+  /** Transient failure — eligible for retry on the next flush. */
   FAILED: 'FAILED',
+  /**
+   * Terminal failure — the server permanently rejected this row (e.g. unknown
+   * questionId or a timestamp outside the 30-day offline window). These rows
+   * are never reselected for flush and are excluded from the pending count so
+   * the UI badge can clear instead of retrying forever.
+   */
+  REJECTED: 'REJECTED',
 } as const;
 
 export type SyncStatus = typeof SYNC_STATUS[keyof typeof SYNC_STATUS];

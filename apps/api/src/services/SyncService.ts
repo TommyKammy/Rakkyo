@@ -22,6 +22,14 @@ interface AttemptSyncResult {
   status: 'created' | 'duplicate' | 'rejected';
   serverId?: string;
   reason?: string;
+  /**
+   * True when the rejection is deterministic and will never succeed on retry
+   * (unknown questionId, out-of-window timestamp). The client marks these as
+   * a terminal REJECTED status instead of retrying forever. Transient
+   * rejections (DB error, generic server error) omit this flag so the client
+   * keeps them retryable.
+   */
+  permanent?: boolean;
 }
 
 /** Full batch sync response including server-recalculated stats. */
@@ -120,6 +128,7 @@ export class SyncService {
             clientEventId: attempt.clientEventId,
             status: 'rejected',
             reason: '送信日時のタイムスタンプが許容範囲外（未来または30日以上前）です。',
+            permanent: true,
           });
           continue;
         }
@@ -155,6 +164,7 @@ export class SyncService {
             clientEventId: attempt.clientEventId,
             status: 'rejected',
             reason: '不明な問題IDのため受け付けできません。',
+            permanent: true,
           });
           continue;
         }

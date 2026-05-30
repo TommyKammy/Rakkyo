@@ -394,12 +394,84 @@ describe('SyncService', () => {
 
     expect(result.results[0].status).toBe('rejected');
     expect(result.results[0].reason).toMatch(/不明な問題ID/);
+    // P2: deterministic rejection must be flagged permanent so the client
+    // marks it terminal (REJECTED) instead of retrying forever.
+    expect(result.results[0].permanent).toBe(true);
     // Nothing from the forged payload should be persisted.
     expect(
       inMemoryState.attempts.find(
         (a) => a.clientEventId === forgedEventId || a.questionId === forgedQuestionId
       )
     ).toBeUndefined();
+  });
+
+  // P2 regression: recompute derives review from history, not the stored
+  // isReview column (which defaults false post-migration).
+  it('derives review XP during recompute regardless of stored isReview (P2)', async () => {
+    const userId = 'recompute-review-student';
+    inMemoryState.users.push({
+      id: userId,
+      tenantId: 'test-tenant-id',
+      email: 'recompute@rakkyo.com',
+      passwordHash: 'x',
+      nickname: 'Recompute Tester',
+      role: 'STUDENT',
+      schoolYear: 1,
+      currentXp: 0,
+      level: 1,
+      streakCount: 0,
+      lastActiveDate: null,
+      parentalConsent: true,
+      aiHintCountToday: 0,
+      lastAiHintDate: null,
+      abuseCount: 0,
+      abuseLastAt: null,
+      lockedUntil: null,
+      badges: [],
+      speechAnalyticsConsent: false,
+      speechAnalysisEnabled: true,
+      createdAt: new Date().toISOString(),
+    } as any);
+
+    // Two correct same-day attempts on the same question, BOTH stored with
+    // isReview: false (simulating pre-migration rows). The recompute should
+    // still treat the second as a 25-XP review because q1 was already correct.
+    const base = Date.now();
+    inMemoryState.attempts.push(
+      {
+        id: 'rc-1',
+        userId,
+        questionId: 'q-rc',
+        isCorrect: true,
+        hintsUsed: 0,
+        answerSubmitted: 'ok',
+        durationSeconds: 5,
+        errorType: null,
+        aiDiagnosis: null,
+        createdAt: new Date(base - 120000).toISOString(),
+        isReview: false,
+      } as any,
+      {
+        id: 'rc-2',
+        userId,
+        questionId: 'q-rc',
+        isCorrect: true,
+        hintsUsed: 0,
+        answerSubmitted: 'ok',
+        durationSeconds: 5,
+        errorType: null,
+        aiDiagnosis: null,
+        createdAt: new Date(base - 60000).toISOString(),
+        isReview: false,
+      } as any
+    );
+
+    const stats = await repo.recalculateUserStats(userId);
+    // attempt1: 10 (correct) + 50 (intuition quest, h0) = 60
+    // attempt2: 25 (derived review) — quests already done same day = 25
+    // total = 85, no level-up.
+    expect(stats.currentXp).toBe(85);
+    expect(stats.level).toBe(1);
   });
 
   // P2 regression: badges crossed entirely offline are awarded on reconciliation.

@@ -183,6 +183,13 @@ export class PrismaSyncRepository implements SyncRepository {
     let currentStreak = 0;
     let lastActiveStr: string | null = null;
     const questionMissedOrHinted = new Map<string, boolean>();
+    // P2: Derive review status from history rather than trusting the stored
+    // `isReview` column. The Phase-16-D migration adds isReview with a default
+    // of false, so review attempts that predate the column would otherwise be
+    // scored as normal 10-XP answers on first recompute and silently reduce a
+    // user's accumulated XP. A "review" is a correct answer to a question the
+    // user already answered correctly earlier (chronologically).
+    const answeredCorrectlyBefore = new Set<string>();
 
     for (const dayStr of sortedDays) {
       // 1. Update streak day-by-day
@@ -215,8 +222,11 @@ export class PrismaSyncRepository implements SyncRepository {
         
         // O(1) Check Grit retry bonus
         const isGritBonus = isCorrect && !!questionMissedOrHinted.get(a.questionId);
-        
-        const xpAwarded = isCorrect ? (isGritBonus ? 30 : (a.isReview ? 25 : 10)) : 0;
+
+        // Derived review: correct answer to a previously-correct question.
+        const effectiveIsReview = answeredCorrectlyBefore.has(a.questionId);
+
+        const xpAwarded = isCorrect ? (isGritBonus ? 30 : (effectiveIsReview ? 25 : 10)) : 0;
         let questXp = 0;
 
         if (!adventureCompleted && attemptsCountToday >= 3) {
@@ -240,9 +250,12 @@ export class PrismaSyncRepository implements SyncRepository {
           xpNeeded = currentLevel * 100;
         }
 
-        // Update tracking map for future attempts on this question
+        // Update tracking maps for future attempts on this question
         if (!isCorrect || a.hintsUsed >= 2) {
           questionMissedOrHinted.set(a.questionId, true);
+        }
+        if (isCorrect) {
+          answeredCorrectlyBefore.add(a.questionId);
         }
       }
     }

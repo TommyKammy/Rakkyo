@@ -109,6 +109,8 @@ export async function flushPendingAttempts(
   synced: number;
   duplicates: number;
   failed: number;
+  /** Count of rows the server permanently rejected (terminal, not retried). */
+  rejected: number;
   serverStats?: { currentXp: number; level: number; streakCount: number };
   jwtExpired?: boolean;
 }> {
@@ -121,6 +123,7 @@ export async function flushPendingAttempts(
   let totalSynced = 0;
   let totalDuplicates = 0;
   let totalFailed = 0;
+  let totalRejected = 0;
   let serverStats: { currentXp: number; level: number; streakCount: number } | undefined;
   const processedIds = new Set<string>();
 
@@ -223,6 +226,7 @@ export async function flushPendingAttempts(
             synced: totalSynced,
             duplicates: totalDuplicates,
             failed: totalFailed,
+            rejected: totalRejected,
             serverStats,
             jwtExpired: true,
           };
@@ -241,6 +245,7 @@ export async function flushPendingAttempts(
             synced: totalSynced,
             duplicates: totalDuplicates,
             failed: totalFailed + remaining.length,
+            rejected: totalRejected,
             serverStats,
           };
         }
@@ -274,7 +279,18 @@ export async function flushPendingAttempts(
               `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
               [SYNC_STATUS.SYNCED, r.clientEventId]
             );
+          } else if (r.permanent === true) {
+            // Terminal rejection (unknown questionId / out-of-window timestamp).
+            // Marking REJECTED stops this row from being reselected on every
+            // flush and excludes it from the pending count so the badge clears,
+            // instead of retrying an attempt that can never succeed.
+            totalRejected++;
+            db.exec(
+              `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
+              [SYNC_STATUS.REJECTED, r.clientEventId]
+            );
           } else {
+            // Transient rejection — keep retryable.
             totalFailed++;
             db.exec(
               `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
@@ -304,6 +320,7 @@ export async function flushPendingAttempts(
     synced: totalSynced,
     duplicates: totalDuplicates,
     failed: totalFailed,
+    rejected: totalRejected,
     serverStats,
   };
 }

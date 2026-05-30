@@ -63,12 +63,15 @@ export async function handleLogout(userId: string): Promise<void> {
 }
 
 /**
- * P2: Drain any pending remote-wipe markers persisted by the Service Worker
- * while no client window was open. The SW push handler writes a flag into
- * `rakkyo-wipe-flags` and finishes the wipe of OPFS / IDB key on its own,
- * but it can't touch `localStorage` from the SW thread. This helper finishes
- * the job at cold start so an attacker can't recover a forgotten/stolen
- * device by just reopening the PWA.
+ * P2: Drain any pending remote-wipe marker persisted by the Service Worker.
+ * The SW writes a `wipe_<userId>` flag into `rakkyo-wipe-flags` whenever a
+ * WIPE_LOCAL_DB push arrives. In the no-client branch the SW also deletes the
+ * OPFS DB + key directly, but in the active-client branch it only posts a
+ * message that an open tab may miss (listener not yet registered, navigating).
+ * This helper therefore finishes the FULL wipe at cold start — clearing the
+ * auth session (which the SW can't touch) AND deleting the OPFS DB + crypto
+ * key — so a missed message can't leave the child's encrypted data on a
+ * forgotten/stolen device.
  *
  * @returns The userId whose wipe was pending (if any), so callers can react.
  */
@@ -113,14 +116,21 @@ export async function drainPendingRemoteWipe(): Promise<string | null> {
             // localStorage may be unavailable in some private modes; ignore
           }
           store.delete(wipeKey);
-          tx.oncomplete = () => {
+
+          // P2: After the flag transaction settles, complete the actual local
+          // data wipe (OPFS DB + AES-GCM key). This guarantees the remote wipe
+          // removes encrypted attempts + key even when an open tab missed the
+          // WIPE_LOCAL_DB message. Run on both complete and error so a flag-tx
+          // failure can't leave the data behind. Best-effort (errors ignored).
+          const finishWipe = () => {
             db.close();
-            resolve(userId);
+            Promise.all([
+              deleteUserOpfsDb(userId).catch(() => {}),
+              deleteKey(`enc_${userId}`).catch(() => {}),
+            ]).finally(() => resolve(userId));
           };
-          tx.onerror = () => {
-            db.close();
-            resolve(userId);
-          };
+          tx.oncomplete = finishWipe;
+          tx.onerror = finishWipe;
         };
         getAllKeysReq.onerror = () => {
           db.close();
