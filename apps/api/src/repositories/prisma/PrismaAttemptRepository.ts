@@ -14,6 +14,7 @@ export class PrismaAttemptRepository implements AttemptRepository {
     errorType?: string | null;
     aiDiagnosis?: string | null;
     isReview?: boolean | null;
+    clientEventId?: string | null;
   }): Promise<Attempt> {
     // P1: Resolve a prompt-style identifier to the canonical Question.id so
     // the FK is valid in production. Keeps this online path consistent with
@@ -30,6 +31,9 @@ export class PrismaAttemptRepository implements AttemptRepository {
         errorType: data.errorType ?? null,
         aiDiagnosis: data.aiDiagnosis ?? null,
         isReview: data.isReview ?? false,
+        // P2: shared idempotency key so a lost-response online submit isn't
+        // double-counted when its offline fallback later syncs.
+        clientEventId: data.clientEventId ?? null,
       }
     });
   }

@@ -13,6 +13,9 @@ const submitSchema = z.object({
   isCorrect: z.boolean().optional(), // Fallback from client if verification fails
   durationSeconds: z.number().int().nonnegative().optional().nullable(),
   isReview: z.boolean().optional(),
+  // P2: optional idempotency key shared with the offline fallback so a
+  // lost-response online submit isn't double-counted when it later syncs.
+  clientEventId: z.string().max(100).optional(),
 });
 
 // Helper to format Date into JST YYYY-MM-DD
@@ -167,7 +170,10 @@ router.post('/submit', authMiddleware, async (req: AuthenticatedRequest, res: Re
       answerSubmitted: parsed.answerSubmitted,
       durationSeconds: parsed.durationSeconds,
       errorType,
-      aiDiagnosis
+      aiDiagnosis,
+      // P2: persist the shared idempotency key so the offline fallback for
+      // this same submit dedupes instead of creating a second Attempt.
+      clientEventId: parsed.clientEventId ?? null,
     });
     attemptId = createdAttempt.id;
 

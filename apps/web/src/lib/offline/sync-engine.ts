@@ -49,9 +49,17 @@ export interface PendingAttempt {
  */
 export async function enqueuePendingAttempt(
   db: OfflineDb,
-  data: Omit<PendingAttempt, 'clientEventId' | 'syncStatus'>
+  data: Omit<PendingAttempt, 'clientEventId' | 'syncStatus'> & {
+    /**
+     * P2: Optional pre-generated idempotency key. When the offline fallback
+     * follows a (possibly server-persisted) online submit, the caller passes
+     * the SAME key it sent to /api/lessons/submit so the sync endpoint dedupes
+     * against the online-created Attempt instead of double-counting.
+     */
+    clientEventId?: string;
+  }
 ): Promise<string> {
-  const clientEventId = crypto.randomUUID();
+  const clientEventId = data.clientEventId ?? crypto.randomUUID();
 
   // D-8: Encrypt answerSubmitted at rest before SQLite insertion
   const key = await getOrCreateUserKey(data.userId);

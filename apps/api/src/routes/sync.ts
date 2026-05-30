@@ -5,6 +5,7 @@ import {
 } from '../middlewares/auth';
 import { SyncService } from '../services/SyncService';
 import { consumeSyncToken } from '../utils/syncRateLimiter';
+import { clientFacingQuestionKeys } from '../utils/questionCacheKeys';
 import {
   SyncBatchRequestSchema,
   OFFLINE_SCHEMA_VERSION,
@@ -141,18 +142,16 @@ router.get('/hints/:lessonId', authMiddleware, async (req, res) => {
       return;
     }
 
-    // P2: Emit each question's hints under BOTH its prompt and its id. The web
-    // client looks up cached hints by `question.id || question.prompt`, which
-    // is the prompt for id-less static (e.g. math) questions even though the
-    // DB row's id is a generated UUID. Keying by both means the client's
-    // lookup hits regardless of which identifier it holds.
+    // P2: Emit each question's hints under EVERY identifier the web client
+    // might use to read them — prompt (math), stable curriculum id
+    // (japanese, mapped via prompt), and the DB/runtime id (dynamic). The
+    // client looks up by `question.id || question.prompt` from the static
+    // curriculum, so keying by all of these means the lookup always hits even
+    // though the DB row's id is a generated UUID.
     const seenKeys = new Set<string>();
     const hintEntries: { questionId: string; hints: string[] }[] = [];
     for (const q of questions) {
-      const keys = [q.prompt, q.id].filter(
-        (k): k is string => typeof k === 'string' && k.length > 0
-      );
-      for (const key of keys) {
+      for (const key of clientFacingQuestionKeys(q)) {
         if (seenKeys.has(key)) continue;
         seenKeys.add(key);
         hintEntries.push({ questionId: key, hints: q.hints || [] });
@@ -189,30 +188,42 @@ router.get('/ai-cache', authMiddleware, async (req, res) => {
       30
     );
 
-    const entries = attempts
-      .filter(
-        (a: { aiDiagnosis?: string | null; question?: { lesson?: { name?: string } } }) =>
-          a.aiDiagnosis && a.aiDiagnosis.length > 0 && !!a.question?.lesson?.name
-      )
-      .map(
-        (a: {
-          questionId: string;
-          aiDiagnosis: string;
-          createdAt: string | Date;
-          question?: { lesson?: { name?: string } };
-        }) => ({
-          // P2: lessonId scopes the offline AI cache (prompt-fallback ids
-          // collide across lessons). Use lesson.name — the same identifier
-          // the web client reads the cache with.
-          lessonId: a.question!.lesson!.name,
-          questionId: a.questionId,
-          diagnosis: a.aiDiagnosis,
-          generatedAt:
-            typeof a.createdAt === 'string'
-              ? a.createdAt
-              : a.createdAt.toISOString(),
-        })
-      );
+    // P2: Emit each diagnosis under EVERY client-facing question identifier
+    // (prompt / stable curriculum id / DB id), scoped by lessonId. Synced
+    // attempts now persist the canonical UUID, but the lesson page reads the
+    // AI cache by `question.id || question.prompt` from the static curriculum,
+    // so a UUID-only key would never be queried (mirrors the hints endpoint).
+    const seen = new Set<string>();
+    const entries: {
+      lessonId: string;
+      questionId: string;
+      diagnosis: string;
+      generatedAt: string;
+    }[] = [];
+    for (const a of attempts as Array<{
+      questionId: string;
+      aiDiagnosis?: string | null;
+      createdAt: string | Date;
+      question?: { id?: string | null; prompt?: string | null; lesson?: { name?: string } };
+    }>) {
+      if (!a.aiDiagnosis || a.aiDiagnosis.length === 0) continue;
+      const lessonId = a.question?.lesson?.name;
+      if (!lessonId) continue;
+      const generatedAt =
+        typeof a.createdAt === 'string' ? a.createdAt : a.createdAt.toISOString();
+      const keys = clientFacingQuestionKeys({
+        id: a.question?.id ?? a.questionId,
+        prompt: a.question?.prompt,
+      });
+      for (const key of keys) {
+        // De-dupe per (lessonId, key); recent-first order means the first
+        // (newest) diagnosis for a key wins.
+        const dedupeKey = `${lessonId}::${key}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        entries.push({ lessonId, questionId: key, diagnosis: a.aiDiagnosis, generatedAt });
+      }
+    }
 
     res.json({ entries });
   } catch (error) {

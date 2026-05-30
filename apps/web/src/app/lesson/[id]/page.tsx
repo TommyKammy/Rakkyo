@@ -657,6 +657,13 @@ function ExerciseScreenContent() {
     const durationSeconds = Math.max(1, Math.round((Date.now() - startTime) / 1000));
     setTotalSeconds(prev => prev + durationSeconds);
 
+    // P2: One shared idempotency key for this submit. We send it to the online
+    // /submit (persisted on the Attempt) AND reuse it for the offline fallback
+    // enqueue, so that if the online request reached the server but its
+    // response was lost, the later sync flush dedupes against the
+    // already-created Attempt instead of double-counting XP/history.
+    const submitClientEventId = crypto.randomUUID();
+
     // Check locally first for instant evaluation/fallback
     const isAnsCorrect = currentQuestion.answers.some(
       (ans: string) => ans.toLowerCase().trim() === submitted.toLowerCase().trim()
@@ -678,7 +685,8 @@ function ExerciseScreenContent() {
             answerSubmitted: submitted,
             hintsUsed,
             durationSeconds,
-            isReview
+            isReview,
+            clientEventId: submitClientEventId
           })
         });
 
@@ -763,6 +771,9 @@ function ExerciseScreenContent() {
         errorType: isAnsCorrect ? null : "incorrect",
         isReview: isReview,
         createdAt: new Date().toISOString(),
+        // P2: reuse the same key sent to /submit so a lost-response online
+        // submit isn't double-counted when this fallback later syncs.
+        clientEventId: submitClientEventId,
       });
       console.log("Successfully enqueued pending offline attempt:", localId);
       window.dispatchEvent(new CustomEvent('rakkyo-offline-attempt-enqueued'));
