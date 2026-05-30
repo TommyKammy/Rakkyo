@@ -819,7 +819,13 @@ function ExerciseScreenContent() {
         try {
           const db = await openUserDb(user.id);
           const { getCachedAiDiagnosis } = await import('@/lib/offline/hint-prefetch');
-          const cachedDiag = getCachedAiDiagnosis(db, currentQuestion.id || currentQuestion.prompt);
+          // P2: scope by lesson so a cross-lesson prompt-id collision can't
+          // surface another lesson's diagnosis.
+          const cachedDiag = getCachedAiDiagnosis(
+            db,
+            lesson.name,
+            currentQuestion.id || currentQuestion.prompt
+          );
           if (cachedDiag) {
             customDiagnosis = cachedDiag.diagnosis;
             staleLabelText = cachedDiag.staleLabel;
@@ -911,6 +917,16 @@ function ExerciseScreenContent() {
   const handleGenerateParentCelebrationLink = async () => {
     const token = localStorage.getItem("rakkyo_token");
     if (!token || !latestAttemptId) return;
+
+    // P2: An offline/transient submit only has a synthetic local id
+    // ("attempt_fallback_*"); no server Attempt exists yet to attach a
+    // celebration to. Sending it to /celebration/trigger would FK-fail and
+    // fall back to a misleading mock link. Ask the learner to sync online
+    // first instead of producing a dead link.
+    if (latestAttemptId.startsWith("attempt_fallback_")) {
+      speak("おうちの人へのおしらせリンクは、オンラインにもどってからつくれるよ！", "neutral");
+      return;
+    }
 
     setIsGeneratingShareLink(true);
     try {

@@ -132,14 +132,17 @@ export async function prefetchAiCache(
 
     const data = await response.json();
     for (const entry of data.entries.slice(0, HINT_PREFETCH_COUNT).reverse()) {
+      // P2: Skip entries without a lessonId — the cache is lesson-scoped to
+      // avoid cross-lesson prompt-id collisions.
+      if (!entry.lessonId) continue;
       const diagnosisJson = JSON.stringify(entry.diagnosis);
       const sizeBytes = new TextEncoder().encode(diagnosisJson).length;
 
       db.exec(
         `INSERT OR REPLACE INTO offline_ai_cache
-           (questionId, diagnosis_json, generatedAt, sizeBytes)
-         VALUES (?, ?, ?, ?)`,
-        [entry.questionId, diagnosisJson, entry.generatedAt, sizeBytes]
+           (lessonId, questionId, diagnosis_json, generatedAt, sizeBytes)
+         VALUES (?, ?, ?, ?, ?)`,
+        [entry.lessonId, entry.questionId, diagnosisJson, entry.generatedAt, sizeBytes]
       );
     }
 
@@ -154,12 +157,18 @@ export async function prefetchAiCache(
  * Get a cached AI diagnosis for a question.
  * Returns null if not cached.
  *
+ * P2: Scoped by `(lessonId, questionId)` because prompt-fallback IDs collide
+ * across lessons; a questionId-only lookup could surface another lesson's
+ * diagnosis. Matches the offline_hint_cache scoping.
+ *
  * @param db - The user's OfflineDb handle
+ * @param lessonId - The lesson the question belongs to
  * @param questionId - The question ID
  * @returns Cached diagnosis with staleness metadata, or null
  */
 export function getCachedAiDiagnosis(
   db: OfflineDb,
+  lessonId: string,
   questionId: string
 ): {
   diagnosis: string;
@@ -172,8 +181,8 @@ export function getCachedAiDiagnosis(
     generatedAt: string;
   }>(
     `SELECT diagnosis_json, generatedAt FROM offline_ai_cache
-     WHERE questionId = ?`,
-    [questionId]
+     WHERE lessonId = ? AND questionId = ?`,
+    [lessonId, questionId]
   );
 
   if (!row) return null;
@@ -213,18 +222,24 @@ function evictStaleCache(db: OfflineDb): void {
 
   if (!totalRow || totalRow.total <= AI_CACHE_MAX_BYTES) return;
 
-  // Delete oldest entries until under limit
-  const entries = db.selectAll<{ questionId: string; sizeBytes: number }>(
-    `SELECT questionId, sizeBytes FROM offline_ai_cache
+  // Delete oldest entries until under limit. Key by (lessonId, questionId)
+  // since that's now the composite primary key (P2 lesson scoping).
+  const entries = db.selectAll<{
+    lessonId: string;
+    questionId: string;
+    sizeBytes: number;
+  }>(
+    `SELECT lessonId, questionId, sizeBytes FROM offline_ai_cache
      ORDER BY generatedAt ASC`
   );
 
   let currentTotal = totalRow.total;
   for (const entry of entries) {
     if (currentTotal <= AI_CACHE_MAX_BYTES) break;
-    db.exec(`DELETE FROM offline_ai_cache WHERE questionId = ?`, [
-      entry.questionId,
-    ]);
+    db.exec(
+      `DELETE FROM offline_ai_cache WHERE lessonId = ? AND questionId = ?`,
+      [entry.lessonId, entry.questionId]
+    );
     currentTotal -= entry.sizeBytes;
   }
 }

@@ -174,8 +174,13 @@ export async function flushPendingAttempts(
       // correctness against canonical answers, so a placeholder would mark
       // legitimately-correct work as incorrect and lock that corruption into
       // the Attempt history while dropping the local row from the retry
-      // queue. Instead, keep the ciphertext intact and mark the row FAILED
-      // so it's never advanced to SYNCED with fabricated content.
+      // queue. Instead, keep the ciphertext intact and do not upload it.
+      //
+      // P2: A missing/corrupt key is a PERMANENT condition on this device —
+      // the ciphertext can never be decrypted, so retrying every flush would
+      // spin forever and keep the pending badge lit. Mark the row terminal
+      // (REJECTED) so it's excluded from future flushes and the pending
+      // count, rather than FAILED (which is reselected for retry).
       let answer: string;
       try {
         const key = await getUserKey(p.userId);
@@ -184,12 +189,12 @@ export async function flushPendingAttempts(
         }
         answer = await decrypt(p.answerSubmitted, key);
       } catch (e) {
-        console.error('Failed to decrypt local attempt answer for sync:', e);
+        console.error('Failed to decrypt local attempt answer for sync (marking terminal):', e);
         db.exec(
           `UPDATE offline_attempts SET syncStatus = ? WHERE clientEventId = ?`,
-          [SYNC_STATUS.FAILED, p.clientEventId]
+          [SYNC_STATUS.REJECTED, p.clientEventId]
         );
-        totalFailed++;
+        totalRejected++;
         continue;
       }
 

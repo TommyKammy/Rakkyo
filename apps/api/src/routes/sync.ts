@@ -4,6 +4,7 @@ import {
   AuthenticatedRequest,
 } from '../middlewares/auth';
 import { SyncService } from '../services/SyncService';
+import { consumeSyncToken } from '../utils/syncRateLimiter';
 import {
   SyncBatchRequestSchema,
   OFFLINE_SCHEMA_VERSION,
@@ -23,6 +24,22 @@ router.post('/batch', authMiddleware, async (req, res) => {
     const userId = authReq.userId;
     if (!userId) {
       res.status(401).json({ error: '認証が必要です。' });
+      return;
+    }
+
+    // D-7 / P2: Enforce per-user sync throttling ACROSS requests. The client
+    // posts one attempt per /batch request, so the per-item throttle inside
+    // processBatch never fires; a modified client could otherwise replay many
+    // one-attempt batches to bypass DB-write throttling. A 429 is safe for the
+    // legitimate client — flushPendingAttempts reverts the row to PENDING and
+    // retries later. Skipped in tests for determinism (mirrors the per-item
+    // throttle's NODE_ENV guard).
+    if (process.env.NODE_ENV !== 'test' && !consumeSyncToken(userId)) {
+      res.status(429).json({
+        error: 'rate_limited',
+        message:
+          '同期リクエストが多すぎます。少し待ってから自動的に再試行されます。',
+      });
       return;
     }
 
@@ -159,15 +176,20 @@ router.get('/ai-cache', authMiddleware, async (req, res) => {
 
     const entries = attempts
       .filter(
-        (a: { aiDiagnosis?: string | null }) =>
-          a.aiDiagnosis && a.aiDiagnosis.length > 0
+        (a: { aiDiagnosis?: string | null; question?: { lesson?: { name?: string } } }) =>
+          a.aiDiagnosis && a.aiDiagnosis.length > 0 && !!a.question?.lesson?.name
       )
       .map(
         (a: {
           questionId: string;
           aiDiagnosis: string;
           createdAt: string | Date;
+          question?: { lesson?: { name?: string } };
         }) => ({
+          // P2: lessonId scopes the offline AI cache (prompt-fallback ids
+          // collide across lessons). Use lesson.name — the same identifier
+          // the web client reads the cache with.
+          lessonId: a.question!.lesson!.name,
           questionId: a.questionId,
           diagnosis: a.aiDiagnosis,
           generatedAt:

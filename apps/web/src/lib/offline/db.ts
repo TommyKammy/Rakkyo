@@ -13,7 +13,7 @@
 // The OPFS VFS requires SharedArrayBuffer → Cross-Origin-Isolation headers.
 
 /** Current local DB schema version — bump when table structure changes (D-6). */
-const LOCAL_SCHEMA_VERSION = 1;
+const LOCAL_SCHEMA_VERSION = 2;
 
 /** Marker for the meta table key that stores schema version. */
 const META_KEY_SCHEMA_VERSION = 'schemaVersion';
@@ -54,6 +54,27 @@ const MIGRATION_V1 = `
   CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+  );
+`;
+
+/**
+ * V2 (P2): Re-scope the AI diagnosis cache by lesson. The original table was
+ * keyed by `questionId` alone, but prompt-fallback IDs collide across lessons
+ * (the static math curriculum has no question id), so a diagnosis cached for
+ * one lesson could be returned for another. The cache is fully regenerable via
+ * prefetch, so we simply drop and recreate it with a composite
+ * (lessonId, questionId) primary key — matching offline_hint_cache.
+ */
+const MIGRATION_V2 = `
+  DROP TABLE IF EXISTS offline_ai_cache;
+
+  CREATE TABLE offline_ai_cache (
+    lessonId       TEXT NOT NULL,
+    questionId     TEXT NOT NULL,
+    diagnosis_json TEXT NOT NULL,
+    generatedAt    TEXT NOT NULL,
+    sizeBytes      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (lessonId, questionId)
   );
 `;
 
@@ -234,15 +255,23 @@ function applyMigrations(db: OfflineDb): void {
   );
   const currentVersion = row ? parseInt(row.value, 10) : 0;
 
+  const setVersion = (v: number) =>
+    db.exec(`INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)`, [
+      META_KEY_SCHEMA_VERSION,
+      String(v),
+    ]);
+
+  // Apply migrations sequentially, recording each version as it completes so
+  // a brand-new DB (version 0) runs every step and an upgrading DB resumes
+  // from where it left off.
   if (currentVersion < 1) {
     db.exec(MIGRATION_V1);
-    db.exec(
-      `INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)`,
-      [META_KEY_SCHEMA_VERSION, String(LOCAL_SCHEMA_VERSION)]
-    );
+    setVersion(1);
   }
-
-  // Future migrations: if (currentVersion < 2) { ... }
+  if (currentVersion < 2) {
+    db.exec(MIGRATION_V2);
+    setVersion(2);
+  }
 }
 
 /**
@@ -263,6 +292,21 @@ export function unmountUserDb(userId: string): void {
  * @param userId - The user whose local data to wipe
  */
 export async function deleteUserOpfsDb(userId: string): Promise<void> {
+  // P2: Finish any in-flight open BEFORE wiping. If a background openUserDb()
+  // (e.g. lesson prefetch) is still in `pendingOpens`, there is no cached
+  // instance for unmountUserDb to close, and the open could otherwise resolve
+  // *after* we remove the file — re-creating and re-caching the user's OPFS DB
+  // on a wiped/shared device. Awaiting it (then unmounting the now-cached
+  // instance) closes that race.
+  const pending = pendingOpens.get(userId);
+  if (pending) {
+    try {
+      await pending;
+    } catch {
+      // An open that failed leaves nothing to clean up.
+    }
+  }
+
   unmountUserDb(userId);
 
   if (!isOpfsAvailable()) {
