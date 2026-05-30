@@ -61,6 +61,18 @@ export async function enqueuePendingAttempt(
 ): Promise<string> {
   const clientEventId = data.clientEventId ?? crypto.randomUUID();
 
+  // P2: Clamp durationSeconds to the sync schema's accepted range [0, 7200].
+  // A learner who leaves the tab open >2h before answering offline would
+  // otherwise enqueue an out-of-range duration that /api/sync/batch rejects
+  // with 400 → the flusher marks it terminal REJECTED → an answer the UI
+  // already accepted and awarded is silently dropped. Capping the recorded
+  // duration (a >2h single-question time is meaningless / idle anyway) keeps
+  // the attempt syncable.
+  const clampedDuration =
+    data.durationSeconds == null
+      ? null
+      : Math.min(7200, Math.max(0, Math.floor(data.durationSeconds)));
+
   // D-8: Encrypt answerSubmitted at rest before SQLite insertion
   const key = await getOrCreateUserKey(data.userId);
   const encryptedAnswer = await encrypt(data.answerSubmitted, key);
@@ -77,7 +89,7 @@ export async function enqueuePendingAttempt(
       data.isCorrect ? 1 : 0,
       data.hintsUsed,
       encryptedAnswer,
-      data.durationSeconds,
+      clampedDuration,
       data.errorType,
       data.createdAt,
       SYNC_STATUS.PENDING,
