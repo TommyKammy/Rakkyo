@@ -413,7 +413,7 @@ router.get('/raw/:key', async (req, res) => {
       return res.status(403).json({ error: '無効な、あるいは期限切れの署名です。' });
     }
 
-    const buffer = storageService.getObject(key);
+    const buffer = await storageService.getObject(key);
     if (!buffer) {
       return res.status(404).json({ error: '画像ファイルが見つかりません。' });
     }

@@ -558,9 +558,9 @@ describe('AI Avatar Maker Integration Tests (Phase 16-B)', () => {
       
       // Verify they exist in database and physical storage
       expect(avatars).toHaveLength(3);
-      candidateKeys.forEach(key => {
-        expect(storageService.hasObject(key)).toBe(true);
-      });
+      for (const key of candidateKeys) {
+        expect(await storageService.hasObject(key)).toBe(true);
+      }
 
       // Seed quota
       expect(inMemoryState.avatarQuotas.filter(q => q.userId === studentSchoolId)).toHaveLength(1);
@@ -589,9 +589,9 @@ describe('AI Avatar Maker Integration Tests (Phase 16-B)', () => {
       expect(relations).toHaveLength(0);
 
       // 5. Verify physical image objects are physically deleted from storage service
-      candidateKeys.forEach(key => {
-        expect(storageService.hasObject(key)).toBe(false);
-      });
+      for (const key of candidateKeys) {
+        expect(await storageService.hasObject(key)).toBe(false);
+      }
     });
   });
 
@@ -614,7 +614,7 @@ describe('AI Avatar Maker Integration Tests (Phase 16-B)', () => {
       oldPendingId = 'old-pending-id';
       oldPendingKey = 'avatar_old_pending.png';
       storageService.uploadAvatarImage = jest.fn().mockResolvedValue(oldPendingKey);
-      storageService['mockFiles'].set(oldPendingKey, Buffer.from('old-pending-img'));
+      await storageService.putObject(oldPendingKey, Buffer.from('old-pending-img'));
       inMemoryState.avatars.push({
         id: oldPendingId,
         userId: studentSchoolId,
@@ -634,7 +634,7 @@ describe('AI Avatar Maker Integration Tests (Phase 16-B)', () => {
       // 2. Seed fresh pending avatar (created today) -> should remain unchanged
       freshPendingId = 'fresh-pending-id';
       freshPendingKey = 'avatar_fresh_pending.png';
-      storageService['mockFiles'].set(freshPendingKey, Buffer.from('fresh-pending-img'));
+      await storageService.putObject(freshPendingKey, Buffer.from('fresh-pending-img'));
       inMemoryState.avatars.push({
         id: freshPendingId,
         userId: studentSchoolId,
@@ -654,7 +654,7 @@ describe('AI Avatar Maker Integration Tests (Phase 16-B)', () => {
       // 3. Seed old approved avatar (older than 30 days) -> should remain unchanged (approved assets are kept)
       oldApprovedId = 'old-approved-id';
       oldApprovedKey = 'avatar_old_approved.png';
-      storageService['mockFiles'].set(oldApprovedKey, Buffer.from('old-approved-img'));
+      await storageService.putObject(oldApprovedKey, Buffer.from('old-approved-img'));
       inMemoryState.avatars.push({
         id: oldApprovedId,
         userId: studentSchoolId,
@@ -674,7 +674,7 @@ describe('AI Avatar Maker Integration Tests (Phase 16-B)', () => {
       // 4. Seed old rejected avatar (older than 30 days) -> should be physically purged
       oldRejectedId = 'old-rejected-id';
       oldRejectedKey = 'avatar_old_rejected.png';
-      storageService['mockFiles'].set(oldRejectedKey, Buffer.from('old-rejected-img'));
+      await storageService.putObject(oldRejectedKey, Buffer.from('old-rejected-img'));
       inMemoryState.avatars.push({
         id: oldRejectedId,
         userId: studentSchoolId,
@@ -712,13 +712,13 @@ describe('AI Avatar Maker Integration Tests (Phase 16-B)', () => {
       const freshPending = remainingAvatars.find(a => a.id === freshPendingId);
       expect(freshPending).toBeDefined();
       expect(freshPending?.status).toBe('PENDING');
-      expect(storageService.hasObject(freshPendingKey)).toBe(true);
+      expect(await storageService.hasObject(freshPendingKey)).toBe(true);
 
       // Old approved avatar is kept in DB and remains APPROVED
       const oldApproved = remainingAvatars.find(a => a.id === oldApprovedId);
       expect(oldApproved).toBeDefined();
       expect(oldApproved?.status).toBe('APPROVED');
-      expect(storageService.hasObject(oldApprovedKey)).toBe(true);
+      expect(await storageService.hasObject(oldApprovedKey)).toBe(true);
 
       // Old pending avatar (which is older than 30 days) was auto-rejected AND physically deleted
       // Wait: In avatars.ts, standard cron cleanup fetches expiredPending older than 30 days,
@@ -726,12 +726,12 @@ describe('AI Avatar Maker Integration Tests (Phase 16-B)', () => {
       // So oldPending should be deleted from DB and storage. Let's verify:
       const oldPending = remainingAvatars.find(a => a.id === oldPendingId);
       expect(oldPending).toBeUndefined(); // deleted from DB
-      expect(storageService.hasObject(oldPendingKey)).toBe(false); // physically deleted from S3/storage
+      expect(await storageService.hasObject(oldPendingKey)).toBe(false); // physically deleted from S3/storage
 
       // Old rejected avatar is deleted from DB and storage
       const oldRejected = remainingAvatars.find(a => a.id === oldRejectedId);
       expect(oldRejected).toBeUndefined(); // deleted from DB
-      expect(storageService.hasObject(oldRejectedKey)).toBe(false); // physically deleted from S3/storage
+      expect(await storageService.hasObject(oldRejectedKey)).toBe(false); // physically deleted from S3/storage
 
       // Verify that auto-rejection audit logs survive avatar deletion.
       // Phase 16-B audit-retention update: AvatarApprovalAudit → Avatar
