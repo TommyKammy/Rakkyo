@@ -212,7 +212,23 @@ export default function ParentDashboardPage() {
     fetchData();
   }, [router]);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // P2: Route through user-isolation.handleLogout so a shared device also
+    // wipes any offline OPFS DB + AES-GCM key for this account (RTBF-local),
+    // not just the session tokens. Loaded dynamically to avoid pulling the
+    // sqlite-wasm dependency into the parent page's initial bundle.
+    try {
+      const userStr = localStorage.getItem("rakkyo_user");
+      const userId = userStr ? JSON.parse(userStr)?.id : null;
+      if (userId) {
+        const { handleLogout: wipeLocalUserData } = await import(
+          "@/lib/offline/user-isolation"
+        );
+        await wipeLocalUserData(userId);
+      }
+    } catch (e) {
+      console.error("Failed to wipe local offline data on logout:", e);
+    }
     localStorage.removeItem("rakkyo_token");
     localStorage.removeItem("rakkyo_user");
     router.push("/");

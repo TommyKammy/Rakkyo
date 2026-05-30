@@ -5,6 +5,7 @@ import { InMemoryAttemptRepository } from './InMemoryAttemptRepository';
 import { InMemoryCollaborativeRepository } from './InMemoryCollaborativeRepository';
 import { InMemoryAvatarRepository } from './InMemoryAvatarRepository';
 import { InMemorySpeechRepository } from './InMemorySpeechRepository';
+import { InMemorySyncRepository } from './InMemorySyncRepository';
 
 export const inMemoryRepos: RepositoryContainer = {
   users: new InMemoryUserRepository(),
@@ -12,8 +13,8 @@ export const inMemoryRepos: RepositoryContainer = {
   attempts: new InMemoryAttemptRepository(),
   collaborative: new InMemoryCollaborativeRepository(),
   avatars: new InMemoryAvatarRepository(),
-  speech: new InMemorySpeechRepository()
+  speech: new InMemorySpeechRepository(),
+  sync: new InMemorySyncRepository(),
 };
 
 export * from './state';
-

@@ -17,6 +17,7 @@ import { LevelUpOverlay } from "./components/LevelUpOverlay";
 import { ClearOverlay } from "./components/ClearOverlay";
 import { ParentShareModal } from "./components/ParentShareModal";
 import { ProgressiveHintPanel } from "./components/ProgressiveHintPanel";
+import { OfflineHintBadge } from "@/components/OfflineHintBadge/OfflineHintBadge";
 
 interface UserProfile {
   id: string;
@@ -140,6 +141,10 @@ function ExerciseScreenContent() {
   const { speak, stop } = useRakkyoVoice();
   const [activeQuestions, setActiveQuestions] = useState<any[]>([]);
   const [aiDiagnosis, setAiDiagnosis] = useState<string | null>(null);
+  // D-5: Track offline-cache staleness so OfflineHintBadge can show honest
+  // freshness signals next to cached AI hints / diagnosis content.
+  const [diagnosisStaleLabel, setDiagnosisStaleLabel] = useState<string | null>(null);
+  const [hintStaleLabels, setHintStaleLabels] = useState<{ [stage: number]: string }>({});
   const [isLoadingSimilar, setIsLoadingSimilar] = useState(false);
 
   useEffect(() => {
@@ -510,7 +515,14 @@ function ExerciseScreenContent() {
       if (response.ok) {
         const data = await response.json();
         setAiHints(prev => ({ ...prev, [stageNum]: data.hintText }));
-        
+        // Fresh server hint — drop any prior offline-cache staleness label.
+        setHintStaleLabels(prev => {
+          if (!(stageNum in prev)) return prev;
+          const next = { ...prev };
+          delete next[stageNum];
+          return next;
+        });
+
         if (data.metaDescription) {
           speakText(`${data.metaDescription}。${data.hintText}`, `hint${stageNum}`, "calm");
         } else {
@@ -518,7 +530,57 @@ function ExerciseScreenContent() {
         }
       }
     } catch (e) {
-      console.warn("⚠️ Failed to fetch AI hint. Falling back to static curriculum hints.", e);
+      console.warn("⚠️ Failed to fetch AI hint. Falling back to offline local cache or static hints.", e);
+      
+      const userStr = localStorage.getItem("rakkyo_user");
+      if (userStr && currentQuestion) {
+        try {
+          const u = JSON.parse(userStr);
+          const { openUserDb } = await import('@/lib/offline/db');
+          const { getCachedHints } = await import('@/lib/offline/hint-prefetch');
+          const db = await openUserDb(u.id);
+          // P2: scope the cache lookup by lesson so cross-lesson
+          // questionId collisions (prompt-fallback IDs) can't surface
+          // hints from a different lesson.
+          const cached = getCachedHints(
+            db,
+            lesson.name,
+            currentQuestion.id || currentQuestion.prompt
+          );
+          
+          if (cached && cached.hints && cached.hints.length > 0) {
+            const index = Math.min(stageNum - 1, cached.hints.length - 1);
+            const cachedHintText = cached.hints[index];
+            if (cachedHintText) {
+              setAiHints(prev => ({ ...prev, [stageNum]: cachedHintText }));
+              // D-5: Surface staleness alongside the offline-cached hint so
+              // children see when hints are not fresh from the server.
+              if (cached.isStale && cached.staleLabel) {
+                setHintStaleLabels(prev => ({ ...prev, [stageNum]: cached.staleLabel! }));
+              } else {
+                setHintStaleLabels(prev => {
+                  if (!(stageNum in prev)) return prev;
+                  const next = { ...prev };
+                  delete next[stageNum];
+                  return next;
+                });
+              }
+              speakText(cachedHintText, `hint${stageNum}`, "neutral");
+              setIsLoadingHint(false);
+              return;
+            }
+          }
+        } catch (err) {
+          console.error("Failed to read cached hints:", err);
+        }
+      }
+
+      // Hard fallback: use question structure hints
+      const q = currentQuestion;
+      const staticHints = q?.hints || [];
+      const fallbackHint = staticHints[stageNum - 1] || staticHints[staticHints.length - 1] || "もう一度ゆっくり考えてみてね。";
+      setAiHints(prev => ({ ...prev, [stageNum]: fallbackHint }));
+      speakText(fallbackHint, `hint${stageNum}`, "neutral");
     } finally {
       setIsLoadingHint(false);
     }
@@ -545,9 +607,24 @@ function ExerciseScreenContent() {
     }
 
     try {
-      setUser(JSON.parse(userStr));
+      const parsedUser = JSON.parse(userStr);
+      setUser(parsedUser);
       const outfit = localStorage.getItem("rakkyo_outfit") || "none";
       setCurrentOutfit(outfit);
+
+      // Prefetch hints and AI cache in the background for offline readiness (P2-4)
+      if (parsedUser && parsedUser.id) {
+        import('@/lib/offline/db').then(async ({ openUserDb }) => {
+          try {
+            const db = await openUserDb(parsedUser.id);
+            const { prefetchHints, prefetchAiCache } = await import('@/lib/offline/hint-prefetch');
+            prefetchHints(db, lesson.name, token);
+            prefetchAiCache(db, token);
+          } catch (err) {
+            console.warn('Failed to background prefetch offline cache:', err);
+          }
+        });
+      }
     } catch (e) {
       router.push("/");
     }
@@ -580,6 +657,13 @@ function ExerciseScreenContent() {
     const durationSeconds = Math.max(1, Math.round((Date.now() - startTime) / 1000));
     setTotalSeconds(prev => prev + durationSeconds);
 
+    // P2: One shared idempotency key for this submit. We send it to the online
+    // /submit (persisted on the Attempt) AND reuse it for the offline fallback
+    // enqueue, so that if the online request reached the server but its
+    // response was lost, the later sync flush dedupes against the
+    // already-created Attempt instead of double-counting XP/history.
+    const submitClientEventId = crypto.randomUUID();
+
     // Check locally first for instant evaluation/fallback
     const isAnsCorrect = currentQuestion.answers.some(
       (ans: string) => ans.toLowerCase().trim() === submitted.toLowerCase().trim()
@@ -601,7 +685,8 @@ function ExerciseScreenContent() {
             answerSubmitted: submitted,
             hintsUsed,
             durationSeconds,
-            isReview
+            isReview,
+            clientEventId: submitClientEventId
           })
         });
 
@@ -619,6 +704,8 @@ function ExerciseScreenContent() {
             setMascotEmotion('incorrect');
             if (data.aiDiagnosis) {
               setAiDiagnosis(data.aiDiagnosis);
+              // Fresh server diagnosis — clear any prior offline-cache staleness label.
+              setDiagnosisStaleLabel(null);
               speak(data.aiDiagnosis, "incorrect");
             } else {
               speak("おしい！ちがうみたいだね。となりのラッキョくんにヒントを聞いてみよう！", "incorrect");
@@ -662,6 +749,47 @@ function ExerciseScreenContent() {
     // Local fallback evaluation (offline mode)
     const fallbackAttemptId = "attempt_fallback_" + Date.now();
     setLatestAttemptId(fallbackAttemptId);
+
+    // Enqueue the pending attempt to SQLite for later sync (P1-7).
+    // P2: Await the durable insert BEFORE awarding XP / advancing the UI.
+    // Previously this ran as a detached promise, so if the learner closed
+    // the PWA or navigated during the sqlite-wasm load / OPFS open /
+    // encryption window, the UI had already accepted and awarded the answer
+    // but the row was never written to offline_attempts and could never be
+    // synced. Awaiting guarantees durability before we acknowledge.
+    try {
+      const { openUserDb } = await import('@/lib/offline/db');
+      const { enqueuePendingAttempt } = await import('@/lib/offline/sync-engine');
+      const db = await openUserDb(user.id);
+      const localId = await enqueuePendingAttempt(db, {
+        userId: user.id,
+        questionId: currentQuestion.id || currentQuestion.prompt,
+        isCorrect: isAnsCorrect,
+        hintsUsed,
+        answerSubmitted: submitted,
+        durationSeconds,
+        errorType: isAnsCorrect ? null : "incorrect",
+        isReview: isReview,
+        createdAt: new Date().toISOString(),
+        // P2: reuse the same key sent to /submit so a lost-response online
+        // submit isn't double-counted when this fallback later syncs.
+        clientEventId: submitClientEventId,
+      });
+      console.log("Successfully enqueued pending offline attempt:", localId);
+      window.dispatchEvent(new CustomEvent('rakkyo-offline-attempt-enqueued'));
+    } catch (e) {
+      console.error("Failed to enqueue offline attempt:", e);
+      // P1: The attempt was NOT durably written (sqlite-wasm load / OPFS /
+      // crypto-key failure). Do NOT award optimistic XP for work that can
+      // never be synced. Roll the answer-check UI back so the learner can
+      // retry, surface a friendly message, and stop here.
+      setIsChecked(false);
+      setIsCorrect(false);
+      setMascotEmotion('incorrect');
+      speak("ごめんね、答えをうまく保存できなかったみたい。もう一度ためしてね。", "neutral");
+      return;
+    }
+
     if (isAnsCorrect) {
       setMascotEmotion('correct');
       speak("正解！すごすぎるよ！ラッキョくんも大喜びだよ！", "correct");
@@ -694,7 +822,39 @@ function ExerciseScreenContent() {
       localStorage.setItem("rakkyo_user", JSON.stringify(updatedUser));
     } else {
       setMascotEmotion('incorrect');
-      speak("おしい！ちがうみたいだね。となりのラッキョくんにヒントを聞いてみよう！", "incorrect");
+
+      // Fallback: Check local SQLite AI diagnosis cache (P2-4)
+      import('@/lib/offline/db').then(async ({ openUserDb }) => {
+        let customDiagnosis: string | null = null;
+        let staleLabelText: string | null = null;
+        try {
+          const db = await openUserDb(user.id);
+          const { getCachedAiDiagnosis } = await import('@/lib/offline/hint-prefetch');
+          // P2: scope by lesson so a cross-lesson prompt-id collision can't
+          // surface another lesson's diagnosis.
+          const cachedDiag = getCachedAiDiagnosis(
+            db,
+            lesson.name,
+            currentQuestion.id || currentQuestion.prompt
+          );
+          if (cachedDiag) {
+            customDiagnosis = cachedDiag.diagnosis;
+            staleLabelText = cachedDiag.staleLabel;
+          }
+        } catch (err) {
+          console.error("Failed to read cached AI diagnosis:", err);
+        }
+
+        if (customDiagnosis) {
+          setAiDiagnosis(customDiagnosis);
+          // D-5: Record stale-label so OfflineHintBadge renders next to the
+          // diagnosis. Clear when the cached diagnosis is fresh.
+          setDiagnosisStaleLabel(staleLabelText);
+          speak(staleLabelText ? `${staleLabelText}。${customDiagnosis}` : customDiagnosis, "incorrect");
+        } else {
+          speak("おしい！ちがうみたいだね。となりのラッキョくんにヒントを聞いてみよう！", "incorrect");
+        }
+      });
     }
   };
 
@@ -728,7 +888,9 @@ function ExerciseScreenContent() {
         setHintStage(1);
         setShowFinalAnswer(false);
         setAiHints({});
+        setHintStaleLabels({});
         setAiDiagnosis(null);
+        setDiagnosisStaleLabel(null);
         setMascotEmotion('normal');
         setStartTime(Date.now());
         
@@ -766,6 +928,16 @@ function ExerciseScreenContent() {
   const handleGenerateParentCelebrationLink = async () => {
     const token = localStorage.getItem("rakkyo_token");
     if (!token || !latestAttemptId) return;
+
+    // P2: An offline/transient submit only has a synthetic local id
+    // ("attempt_fallback_*"); no server Attempt exists yet to attach a
+    // celebration to. Sending it to /celebration/trigger would FK-fail and
+    // fall back to a misleading mock link. Ask the learner to sync online
+    // first instead of producing a dead link.
+    if (latestAttemptId.startsWith("attempt_fallback_")) {
+      speak("おうちの人へのおしらせリンクは、オンラインにもどってからつくれるよ！", "neutral");
+      return;
+    }
 
     setIsGeneratingShareLink(true);
     try {
@@ -809,7 +981,9 @@ function ExerciseScreenContent() {
     setHintStage(1);
     setShowFinalAnswer(false);
     setAiHints({});
+    setHintStaleLabels({});
     setAiDiagnosis(null);
+    setDiagnosisStaleLabel(null);
     setMascotEmotion('normal'); // Reset mascot emotion
 
     // Clear speech states
@@ -959,6 +1133,12 @@ function ExerciseScreenContent() {
                     <h4 className="font-extrabold text-sm">
                       {isCorrect ? "正解！すごすぎる！" : "おしい！ちがうみたい..."}
                     </h4>
+                    {/* D-5: Honest authenticity — surface offline-cache staleness next to the AI diagnosis. */}
+                    {!isCorrect && aiDiagnosis && diagnosisStaleLabel && (
+                      <div className="mt-1">
+                        <OfflineHintBadge isStale={true} staleLabel={diagnosisStaleLabel} />
+                      </div>
+                    )}
                     <p className="text-xs font-semibold mt-1 opacity-90 leading-relaxed">
                       {isCorrect
                         ? "この調子で次の問題もクリアして、XPをたくさん集めよう！"
@@ -1048,6 +1228,7 @@ function ExerciseScreenContent() {
             showFinalAnswer={showFinalAnswer}
             setShowFinalAnswer={setShowFinalAnswer}
             aiHints={aiHints}
+            hintStaleLabels={hintStaleLabels}
             currentQuestion={currentQuestion}
             isPlayingTts={isPlayingTts}
             speakText={speakText}

@@ -165,5 +165,39 @@ export class InMemoryCurriculumRepository implements CurriculumRepository {
     }
     return limit ? lessons.slice(0, limit) : lessons;
   }
+
+  async findQuestionsByLessonId(lessonIdOrName: string): Promise<any[]> {
+    // P2: Accept either canonical Lesson.id or lesson name. The in-memory
+    // store keys dynamic questions by name (mirrors the static curriculum
+    // identifier the web client carries), so a single name comparison
+    // matches both forms here.
+    const dynamicQs = inMemoryState.dynamicQuestions.filter(q => q.lessonId === lessonIdOrName);
+
+    const staticQs: any[] = [];
+    for (const curriculum of allCurriculums) {
+      for (const unit of curriculum.units) {
+        for (const lesson of unit.lessons) {
+          if (lesson.name === lessonIdOrName) {
+            staticQs.push(...lesson.questions.map(q => ({
+              id: q.id || q.prompt,
+              // P2: carry the prompt so the hints route can also expose a
+              // prompt-keyed cache entry (symmetric with the Prisma repo).
+              prompt: q.prompt,
+              hints: q.hints || []
+            })));
+          }
+        }
+      }
+    }
+    
+    // Merge and deduplicate by ID / prompt (P2-10)
+    const merged = [...dynamicQs];
+    for (const sq of staticQs) {
+      if (!merged.some(mq => mq.id === sq.id || mq.prompt === sq.id)) {
+        merged.push(sq);
+      }
+    }
+    return merged;
+  }
 }
 

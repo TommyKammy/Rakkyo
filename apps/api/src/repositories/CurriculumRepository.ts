@@ -31,5 +31,6 @@ export interface CurriculumRepository {
   }): Promise<any>;
   findAllUnits(subjectCode?: string): Promise<any[]>;
   findLessons(limit?: number): Promise<any[]>;
+  findQuestionsByLessonId(lessonId: string): Promise<any[]>;
 }
 

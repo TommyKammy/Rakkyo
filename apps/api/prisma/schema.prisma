@@ -92,6 +92,9 @@ model User {
   phonemeStruggles       PhonemeStruggle[]
   speechAnalyses         SpeechAnalysis[]
 
+  // Phase-16-D
+  offlineSyncLogs        OfflineSyncLog[]
+
   @@unique([tenantId, email])
   @@index([tenantId])
 }
@@ -231,6 +234,10 @@ model Attempt {
   createdAt       DateTime @default(now())
   errorType       String?
   aiDiagnosis     String?
+  isReview        Boolean  @default(false)
+
+  // Phase-16-D: Idempotency key for offline sync dedup (D-1)
+  clientEventId   String?  @unique
 
   // Phase-12
   parentalCelebrations ParentalCelebration[]
@@ -506,4 +513,16 @@ model SpeechAnalysis {
   @@index([userId])
 }
 
+// Phase-16-D: Offline sync audit trail
+model OfflineSyncLog {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId     String
+  attemptCount Int
+  status       String   // "SUCCESS" | "PARTIAL" | "FAILED"
+  errorDetails String?
+  syncedAt     DateTime @default(now())
 
+  @@index([userId])
+}

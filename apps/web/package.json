@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@rakkyo/curriculum": "workspace:*",
+    "@rakkyo/shared": "workspace:*",
+    "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
     "next": "16.2.6",
     "react": "19.2.4",
     "react-dom": "19.2.4"

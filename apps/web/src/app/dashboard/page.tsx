@@ -490,7 +490,25 @@ export default function StudentDashboard() {
     };
   }, [router]);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // P2: Also wipe the offline OPFS DB + AES-GCM key (RTBF-local) so a
+    // shared device doesn't retain the child's encrypted attempts/key after
+    // logout. user-isolation.handleLogout clears token + user + mounted
+    // marker + OPFS file + crypto key. Loaded dynamically to keep the
+    // sqlite-wasm dependency out of the dashboard's initial bundle.
+    try {
+      const userStr = localStorage.getItem("rakkyo_user");
+      const userId = userStr ? JSON.parse(userStr)?.id : null;
+      if (userId) {
+        const { handleLogout: wipeLocalUserData } = await import(
+          "@/lib/offline/user-isolation"
+        );
+        await wipeLocalUserData(userId);
+      }
+    } catch (e) {
+      console.error("Failed to wipe local offline data on logout:", e);
+    }
+    // Ensure session keys are cleared even if the offline wipe path failed.
     localStorage.removeItem("rakkyo_token");
     localStorage.removeItem("rakkyo_user");
     localStorage.removeItem("rakkyo_outfit");

@@ -13,9 +13,13 @@ export class InMemoryAttemptRepository implements AttemptRepository {
     durationSeconds?: number | null;
     errorType?: string | null;
     aiDiagnosis?: string | null;
+    isReview?: boolean | null;
+    clientEventId?: string | null;
   }): Promise<Attempt> {
     const newAttempt = {
       ...data,
+      isReview: data.isReview ?? false,
+      clientEventId: data.clientEventId ?? null,
       id: 'attempt_' + crypto.randomUUID(),
       createdAt: new Date().toISOString(),
     };

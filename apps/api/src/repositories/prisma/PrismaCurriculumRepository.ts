@@ -4,6 +4,7 @@ import { allCurriculums } from '@rakkyo/curriculum';
 
 export class PrismaCurriculumRepository implements CurriculumRepository {
   async findQuestionById(id: string): Promise<any | null> {
+    let dbError: unknown = null;
     try {
       // 1. Search DB question
       const dbQ = await prisma.question.findUnique({
@@ -12,9 +13,10 @@ export class PrismaCurriculumRepository implements CurriculumRepository {
       if (dbQ) return dbQ;
     } catch (e) {
       console.warn('⚠️ Database query failed when finding question. Falling back to local curriculum search.', e);
+      dbError = e;
     }
 
-    // 2. Search static curriculum
+    // 2. Search static curriculum (resilient fallback for the online path)
     for (const curriculum of allCurriculums) {
       for (const unit of curriculum.units) {
         for (const lesson of unit.lessons) {
@@ -24,6 +26,16 @@ export class PrismaCurriculumRepository implements CurriculumRepository {
           }
         }
       }
+    }
+
+    // P2: Preserve the distinction between "definitively not found" (null) and
+    // "lookup failed" (throw). The DB query may have errored for a DB-only
+    // dynamic/generated question that has no static counterpart; returning
+    // null there would make offline sync treat a transient outage as a
+    // permanent unknown-question rejection and drop the attempt. Rethrowing
+    // lets callers (SyncService) classify it as transient and keep retrying.
+    if (dbError) {
+      throw dbError;
     }
     return null;
   }
@@ -155,5 +167,52 @@ export class PrismaCurriculumRepository implements CurriculumRepository {
       include: { unit: true },
       take: limit
     });
+  }
+
+  async findQuestionsByLessonId(lessonIdOrName: string): Promise<any[]> {
+    // P2: Accept either the canonical Lesson.id (FK used by Question.lessonId)
+    // or the lesson's display name. The web client only carries the static
+    // curriculum `lesson.name`, so the API must resolve either form.
+    const dbQs: any[] = [];
+    try {
+      const found = await prisma.question.findMany({
+        where: {
+          OR: [
+            { lessonId: lessonIdOrName },
+            { lesson: { name: lessonIdOrName } },
+          ],
+        },
+      });
+      dbQs.push(...found);
+    } catch (e) {
+      console.warn('⚠️ Database query failed when finding questions by lesson ID. Falling back to local curriculum search.', e);
+    }
+
+    const staticQs: any[] = [];
+    for (const curriculum of allCurriculums) {
+      for (const unit of curriculum.units) {
+        for (const lesson of unit.lessons) {
+          if (lesson.name === lessonIdOrName) {
+            staticQs.push(...lesson.questions.map(q => ({
+              id: q.id || q.prompt,
+              // P2: carry the prompt so the hints route can also expose a
+              // prompt-keyed cache entry (the client looks up by prompt for
+              // id-less static questions).
+              prompt: q.prompt,
+              hints: q.hints || []
+            })));
+          }
+        }
+      }
+    }
+
+    // Merge and deduplicate by question ID/prompt (P2-10)
+    const merged = [...dbQs];
+    for (const sq of staticQs) {
+      if (!merged.some(mq => mq.id === sq.id || mq.prompt === sq.id)) {
+        merged.push(sq);
+      }
+    }
+    return merged;
   }
 }

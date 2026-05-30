@@ -12,6 +12,7 @@ import usersRouter from './routes/users';
 import ttsRouter from './routes/tts';
 import avatarsRouter from './routes/avatars';
 import speechRouter from './routes/speech';
+import syncRouter from './routes/sync';
 
 const app = express();
 
@@ -22,7 +23,14 @@ app.use(express.json({ limit: '2mb' }));
 app.use(repositoryMiddleware);
 
 // Serve cached TTS audio files statically
-app.use('/cache/tts', express.static(path.join(__dirname, '../public/cache/tts')));
+app.use(
+  '/cache/tts',
+  express.static(path.join(__dirname, '../public/cache/tts'), {
+    setHeaders: (res) => {
+      res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+    },
+  })
+);
 
 app.use('/api/auth', authRouter);
 app.use('/api/lessons', lessonsRouter);
@@ -33,6 +41,7 @@ app.use('/api/users', usersRouter);
 app.use('/api/tts', ttsRouter);
 app.use('/api/avatars', avatarsRouter);
 app.use('/api/speech', speechRouter);
+app.use('/api/sync', syncRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({

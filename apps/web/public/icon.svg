@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Rakkyo">
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="#FAF9F6"/>
+  <!-- Rakkyo bulb body -->
+  <ellipse cx="256" cy="320" rx="140" ry="160" fill="#F5F3FF"/>
+  <ellipse cx="256" cy="320" rx="140" ry="160" fill="none" stroke="#8B5CF6" stroke-width="14"/>
+  <!-- Bulb shading -->
+  <path d="M210 200 Q256 460 302 200" fill="none" stroke="#C4B5FD" stroke-width="6" stroke-linecap="round"/>
+  <!-- Leaf -->
+  <path d="M256 200 C 240 130 230 70 256 32 C 282 70 272 130 256 200 Z" fill="#A78BFA"/>
+  <path d="M256 200 L256 60" stroke="#7C3AED" stroke-width="6" stroke-linecap="round"/>
+  <!-- Eyes -->
+  <circle cx="220" cy="320" r="14" fill="#1F2937"/>
+  <circle cx="292" cy="320" r="14" fill="#1F2937"/>
+  <circle cx="224" cy="316" r="4" fill="#FFFFFF"/>
+  <circle cx="296" cy="316" r="4" fill="#FFFFFF"/>
+  <!-- Cheeks -->
+  <circle cx="190" cy="350" r="14" fill="#FBCFE8" opacity="0.7"/>
+  <circle cx="322" cy="350" r="14" fill="#FBCFE8" opacity="0.7"/>
+  <!-- Smile -->
+  <path d="M232 370 Q256 392 280 370" fill="none" stroke="#1F2937" stroke-width="6" stroke-linecap="round"/>
+</svg>
